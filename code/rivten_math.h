@@ -615,6 +615,7 @@ struct mat4
 {
     float Data_[16];
 
+    void operator+=(mat4 M);
     void operator*=(float Lambda);
     void operator/=(float Lambda);
 };
@@ -633,6 +634,16 @@ inline float GetValue(mat4 M, int i, int j)
     return(M.Data_[4 * j + i]);
 }
 
+mat4 operator+(mat4 A, mat4 B)
+{
+	mat4 Result = {};
+	for(u32 i = 0; i < 16; ++i)
+	{
+		Result.Data_[i] = A.Data_[i] + B.Data_[i];
+	}
+    return(Result);
+}
+
 mat4 operator*(float Lambda, mat4 A)
 {
 	mat4 Result = {};
@@ -647,6 +658,11 @@ mat4 operator/(mat4 A, float Lambda)
 {
     Assert(Lambda != 0.0f);
     return((1.0f / Lambda) * A);
+}
+
+void mat4::operator+=(mat4 M)
+{
+	*this = M + (*this);
 }
 
 void mat4::operator*=(float Lambda)

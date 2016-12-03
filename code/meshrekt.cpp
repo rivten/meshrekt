@@ -35,11 +35,7 @@ typedef size_t memory_index;
 
 /*
  * TODO(hugo)
- *      * List all possible edge contraction according to GH
- *      * Compute quadric errors for each edge contraction
- *      * Solve minimization problem for a given edge contraction
  *      * Perform GH algorithm
- *      * Measure error between input and output meshes
  *      * Compute one face planarity score
  *      * Compute planar proxies
  *      * Display planar proxies
@@ -66,6 +62,13 @@ struct triangle
 		};
 		u32 VertexIndices[3];
 	};
+};
+
+struct contraction
+{
+	edge Edge;
+	float Cost;
+	vertex OptimalVertex;
 };
 
 #define MAX_VERTEX_COUNT 1000
@@ -300,6 +303,141 @@ float MeanDistance(mesh* A, mesh* B)
 	return(Maxf(DistFromAToB, DistFromBToA));
 }
 
+struct contraction_queue
+{
+	contraction Contractions[3 * MAX_VERTEX_COUNT];
+	u32 ContractionCount;
+};
+
+void PushContraction(contraction_queue* Queue, contraction C)
+{
+	Assert(Queue->ContractionCount < ArrayCount(Queue->Contractions));
+
+	if(Queue->ContractionCount == 0)
+	{
+		Queue->Contractions[Queue->ContractionCount] = C;
+		Queue->ContractionCount++;
+	}
+	else if(C.Cost <= Queue->Contractions[Queue->ContractionCount - 1].Cost)
+	{
+		Queue->Contractions[Queue->ContractionCount] = C;
+		Queue->ContractionCount++;
+	}
+	else
+	{
+		for(u32 ContractionIndex = Queue->ContractionCount - 1; ContractionIndex >= 1; --ContractionIndex)
+		{
+			Queue->Contractions[ContractionIndex + 1] = Queue->Contractions[ContractionIndex];
+			if(C.Cost <= Queue->Contractions[ContractionIndex - 1].Cost)
+			{
+				Queue->Contractions[ContractionIndex] = C;
+				Queue->ContractionCount++;
+				return;
+			}
+		}
+		Queue->Contractions[1] = Queue->Contractions[0];
+		Queue->Contractions[0] = C;
+		Queue->ContractionCount++;
+	}
+}
+
+bool IsEdgeInMesh(mesh* Mesh, u32 Vertex0Index, u32 Vertex1Index)
+{
+	edge E = {Vertex0Index, Vertex1Index};
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		if(TriangleContainsEdge(Mesh->Triangles[TriangleIndex], E))
+		{
+			return(true);
+		}
+	}
+	return(false);
+}
+
+mat4 ComputeQuadric(mesh* Mesh, u32 VertexIndex)
+{
+	mat4 Quadric = {};
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		triangle T = Mesh->Triangles[TriangleIndex];
+		if((T.Vertex0Index == VertexIndex) || (T.Vertex1Index == VertexIndex) || (T.Vertex2Index == VertexIndex))
+		{
+			// NOTE(hugo) : Computing the plane equation of the triangle : ax + by + cz + d = 0 
+			// with a*a + b*b + c*c = 1
+			vertex A = Mesh->Vertices[T.VertexIndices[0]];
+			vertex B = Mesh->Vertices[T.VertexIndices[1]];
+			vertex C = Mesh->Vertices[T.VertexIndices[2]];
+			vertex N = Normalized(Cross(B - A, C - A));
+			float d = - Dot(N, A);
+			mat4 PlaneQuadric = {};
+			SetValue(&PlaneQuadric, 0, 0, N.x * N.x);
+			SetValue(&PlaneQuadric, 0, 1, N.x * N.y);
+			SetValue(&PlaneQuadric, 0, 2, N.x * N.z);
+			SetValue(&PlaneQuadric, 0, 3, N.x * d);
+
+			SetValue(&PlaneQuadric, 1, 0, N.y * N.x);
+			SetValue(&PlaneQuadric, 1, 1, N.y * N.y);
+			SetValue(&PlaneQuadric, 1, 2, N.y * N.z);
+			SetValue(&PlaneQuadric, 1, 3, N.y * d);
+
+			SetValue(&PlaneQuadric, 2, 0, N.z * N.x);
+			SetValue(&PlaneQuadric, 2, 1, N.z * N.y);
+			SetValue(&PlaneQuadric, 2, 2, N.z * N.z);
+			SetValue(&PlaneQuadric, 2, 3, N.z * d);
+
+			SetValue(&PlaneQuadric, 3, 0, d * N.x);
+			SetValue(&PlaneQuadric, 3, 1, d * N.y);
+			SetValue(&PlaneQuadric, 3, 2, d * N.z);
+			SetValue(&PlaneQuadric, 3, 3, d * d);
+
+			Quadric += PlaneQuadric;
+		}
+	}
+
+	return(Quadric);
+}
+
+void ComputeCostAndVertexOfContraction(mesh* Mesh, contraction* C, mat4 Quadric)
+{
+	SetValue(&Quadric, 3, 0, 0);
+	SetValue(&Quadric, 3, 1, 0);
+	SetValue(&Quadric, 3, 2, 0);
+	SetValue(&Quadric, 3, 3, 1);
+
+	if(Det(Quadric) == 0)
+	{
+		// NOTE(hugo) : The quadric is not invertible, fall back to a simple plan
+		C->OptimalVertex = 0.5f * (Mesh->Vertices[C->Edge.Vertex0Index] + Mesh->Vertices[C->Edge.Vertex1Index]);
+	}
+	else
+	{
+		v4 Solution = Inverse(Quadric) * V4(0.0f, 0.0f, 0.0f, 1.0f);
+		C->OptimalVertex = {Solution.x, Solution.y, Solution.z};
+	}
+	C->Cost = Dot(ToV4(C->OptimalVertex), Quadric * ToV4(C->OptimalVertex));
+}
+
+void ComputeContractions(mesh* Mesh, contraction_queue* Queue)
+{
+	for(u32 Vertex0Index = 0; Vertex0Index < Mesh->VertexCount - 1; ++Vertex0Index)
+	{
+		for(u32 Vertex1Index = Vertex0Index + 1; Vertex1Index < Mesh->VertexCount; ++Vertex1Index)
+		{
+			if(IsEdgeInMesh(Mesh, Vertex0Index, Vertex1Index))
+			{
+				contraction C = {};
+				C.Edge = {Vertex0Index, Vertex1Index};
+				// TODO(hugo) : Can be improved by storing a list of quadric per vertices
+				mat4 Quadric = ComputeQuadric(Mesh, Vertex0Index) + ComputeQuadric(Mesh, Vertex1Index);
+				ComputeCostAndVertexOfContraction(Mesh, &C, Quadric);
+
+				// NOTE(hugo) : inserting the contraction in the list (the list is in decreasing order)
+				PushContraction(Queue, C);
+			}
+		}
+	}
+}
+
 mesh ParseOFF(const char* Filename)
 {
 	FILE* File = 0;
@@ -405,8 +543,8 @@ int main(int ArgumentCount, char** Arguments)
 	mesh InputMesh = Mesh;
 	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
-	edge E = RandomEdge(&Mesh);
-	ContractEdge(&Mesh, E);
+	contraction_queue Queue = {};
+	ComputeContractions(&Mesh, &Queue);
 
 	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
 	printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
