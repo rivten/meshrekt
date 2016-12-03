@@ -1,11 +1,8 @@
-//#include <CGAL/Simple_cartesian.h>
-//#include <CGAL/Polyhedron_3.h>
-//#include <CGAL/IO/Polyhedron_iostream.h>
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <float.h>
 
 #define Assert(x) do{if(!(x)){*(int*)0=0;}}while(0)
 #define ArrayCount(x) (sizeof(x)/sizeof((x)[0]))
@@ -33,9 +30,11 @@ typedef float r32;
 typedef double r64;
 
 typedef size_t memory_index;
+
+#include "rivten_math.h"
+
 /*
  * TODO(hugo)
- *      * Compute quadric error according to SAMD
  *      * List all possible edge contraction according to GH
  *      * Compute quadric errors for each edge contraction
  *      * Solve minimization problem for a given edge contraction
@@ -44,14 +43,10 @@ typedef size_t memory_index;
  *      * Compute one face planarity score
  *      * Compute planar proxies
  *      * Display planar proxies
+ *      * Compute SAMD quadric heuristic
  */
 
-struct vertex
-{
-	float x;
-	float y;
-	float z;
-};
+typedef v3 vertex;
 
 struct edge
 {
@@ -267,6 +262,44 @@ void ContractEdge(mesh* Mesh, edge E)
 	}
 }
 
+
+float Distance(vertex V, mesh* Mesh)
+{
+	float MinDistSqrFound = FLT_MAX;
+
+	for(u32 VertexIndex = 0; VertexIndex < Mesh->VertexCount; ++VertexIndex)
+	{
+		MinDistSqrFound = Minf(MinDistSqrFound, LengthSqr(V - Mesh->Vertices[VertexIndex]));
+		if(MinDistSqrFound == 0.0f)
+		{
+			return(0.0f);
+		}
+	}
+
+	return(sqrt(MinDistSqrFound));
+}
+
+float MeanDistance(mesh* A, mesh* B)
+{
+	float DistFromAToB = 0.0f;
+	for(u32 VAIndex = 0; VAIndex < A->VertexCount; ++VAIndex)
+	{
+		vertex VA = A->Vertices[VAIndex];
+		DistFromAToB += Distance(VA, B);
+	}
+	DistFromAToB /= A->VertexCount;
+
+	float DistFromBToA = 0.0f;
+	for(u32 VBIndex = 0; VBIndex < B->VertexCount; ++VBIndex)
+	{
+		vertex VB = B->Vertices[VBIndex];
+		DistFromBToA += Distance(VB, A);
+	}
+	DistFromBToA /= B->VertexCount;
+
+	return(Maxf(DistFromAToB, DistFromBToA));
+}
+
 mesh ParseOFF(const char* Filename)
 {
 	FILE* File = 0;
@@ -367,10 +400,16 @@ int main(int ArgumentCount, char** Arguments)
 	srand(time(0));
 
 	mesh Mesh = ParseOFF(Arguments[1]);
-	printf("The input mesh contains %d vertices.", Mesh.VertexCount);
+
+	// NOTE(hugo): Copying the mesh to compute the distance between our mesh and the input one
+	mesh InputMesh = Mesh;
+	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
 	edge E = RandomEdge(&Mesh);
 	ContractEdge(&Mesh, E);
+
+	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
+	printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
 
 	SaveOFF(&Mesh, "output.off");
 
