@@ -5,8 +5,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+
 #define Assert(x) do{if(!(x)){*(int*)0=0;}}while(0)
 #define ArrayCount(x) (sizeof(x)/sizeof((x)[0]))
+#define InvalidCodePath Assert(!"InvalidCodePath");
+#define InvalidDefaultCase default: {InvalidCodePath;} break
+
 #include <cstdint>
 
 #ifdef __unix__
@@ -30,8 +35,7 @@ typedef double r64;
 typedef size_t memory_index;
 /*
  * TODO(hugo)
- *      * load and save off file
- *      * Perform one basic mesh decimation
+ *      * Compute quadric error according to SAMD
  *      * List all possible edge contraction according to GH
  *      * Compute quadric errors for each edge contraction
  *      * Solve minimization problem for a given edge contraction
@@ -40,7 +44,6 @@ typedef size_t memory_index;
  *      * Compute one face planarity score
  *      * Compute planar proxies
  *      * Display planar proxies
- *      * Compute quadric error according to SAMD
  */
 
 struct vertex
@@ -50,17 +53,23 @@ struct vertex
 	float z;
 };
 
+struct edge
+{
+	u32 Vertex0Index;
+	u32 Vertex1Index;
+};
+
 struct triangle
 {
 	union
 	{
 		struct
 		{
-			int Vertex0Index;
-			int Vertex1Index;
-			int Vertex2Index;
+			u32 Vertex0Index;
+			u32 Vertex1Index;
+			u32 Vertex2Index;
 		};
-		int VertexIndices[3];
+		u32 VertexIndices[3];
 	};
 };
 
@@ -85,6 +94,177 @@ void PushTriangle(mesh* Mesh, triangle T)
 	Assert(Mesh->TriangleCount < ArrayCount(Mesh->Triangles));
 	Mesh->Triangles[Mesh->TriangleCount] = T;
 	Mesh->TriangleCount++;
+}
+
+void DeleteTriangle(mesh* Mesh, u32 TriangleIndex)
+{
+	Assert(TriangleIndex < Mesh->TriangleCount);
+	Assert(Mesh->TriangleCount > 0);
+	Mesh->Triangles[TriangleIndex] = Mesh->Triangles[Mesh->TriangleCount - 1];
+	Mesh->TriangleCount--;
+}
+
+void DeleteVertex(mesh* Mesh, u32 VertexIndex)
+{
+	Assert(VertexIndex < Mesh->VertexCount);
+	Assert(Mesh->VertexCount > 0);
+	Mesh->Vertices[VertexIndex] = Mesh->Vertices[Mesh->VertexCount - 1];
+	Mesh->VertexCount--;
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		triangle* T = Mesh->Triangles + TriangleIndex;
+		if(T->Vertex0Index == Mesh->VertexCount)
+		{
+			T->Vertex0Index = VertexIndex;
+		}
+		else if(T->Vertex1Index == Mesh->VertexCount)
+		{
+			T->Vertex1Index = VertexIndex;
+		}
+		else if(T->Vertex2Index == Mesh->VertexCount)
+		{
+			T->Vertex2Index = VertexIndex;
+		}
+	}
+}
+
+edge RandomEdge(mesh* Mesh)
+{
+	u32 RandomTriangleIndex = rand() % Mesh->TriangleCount;
+	triangle RandomTriangle = Mesh->Triangles[RandomTriangleIndex];
+	u32 RandomVertexIndex = rand() % 3;
+	edge Result = {};
+
+	Result.Vertex0Index = RandomTriangle.VertexIndices[RandomVertexIndex];
+	Result.Vertex1Index = RandomTriangle.VertexIndices[(RandomVertexIndex + 1) % 3];
+
+	return(Result);
+}
+
+bool TriangleContainsEdge(triangle T, edge E)
+{
+	u32 V0Index = E.Vertex0Index;
+	u32 V1Index = E.Vertex1Index;
+	bool V0Found = false;
+	for(u32 i = 0; i < ArrayCount(T.VertexIndices); ++i)
+	{
+		if(V0Index == T.VertexIndices[i])
+		{
+			V0Found = true;
+			break;
+		}
+	}
+	if(!V0Found)
+	{
+		return(false);
+	}
+	
+	for(u32 i = 0; i < ArrayCount(T.VertexIndices); ++i)
+	{
+		if(V1Index == T.VertexIndices[i])
+		{
+			return(true);
+		}
+	}
+	return(false);
+}
+
+void FindTrianglesIncidentToEdge(mesh* Mesh, edge E, u32* T0Index, u32* T1Index)
+{
+	bool Found0 = false;
+	bool Found1 = false;
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		triangle T = Mesh->Triangles[TriangleIndex];
+		if(TriangleContainsEdge(T, E))
+		{
+			if(!Found0)
+			{
+				Found0 = true;
+				*T0Index = TriangleIndex;
+			}
+			else if(!Found1)
+			{
+				Found1 = true;
+				*T1Index = TriangleIndex;
+				return;
+			}
+			else
+			{
+				InvalidCodePath;
+			}
+		}
+	}
+	InvalidCodePath;
+}
+
+void ContractEdge(mesh* Mesh, edge E)
+{
+	vertex V0 = Mesh->Vertices[E.Vertex0Index];
+	vertex V1 = Mesh->Vertices[E.Vertex1Index];
+	u32 T0Index = 0;
+	u32 T1Index = 0;
+	FindTrianglesIncidentToEdge(Mesh, E, &T0Index, &T1Index);
+
+	if(T1Index == Mesh->TriangleCount - 1)
+	{
+		DeleteTriangle(Mesh, T0Index);
+		DeleteTriangle(Mesh, T0Index);
+	}
+	else
+	{
+		DeleteTriangle(Mesh, T0Index);
+		DeleteTriangle(Mesh, T1Index);
+	}
+
+	vertex VFinal = {};
+	VFinal.x = 0.5f * (V0.x + V1.x);
+	VFinal.y = 0.5f * (V0.y + V1.y);
+	VFinal.z = 0.5f * (V0.z + V1.z);
+
+	PushVertex(Mesh, VFinal);
+
+	// NOTE(hugo) : Remplacing all occurences of V0 and V1 in triangles by VF (the last point added to the mesh)
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		triangle* T = Mesh->Triangles + TriangleIndex;
+		if(T->Vertex0Index == E.Vertex0Index)
+		{
+			T->Vertex0Index = Mesh->VertexCount - 1;
+		}
+		else if(T->Vertex1Index == E.Vertex0Index)
+		{
+			T->Vertex1Index = Mesh->VertexCount - 1;
+		}
+		else if(T->Vertex2Index == E.Vertex0Index)
+		{
+			T->Vertex2Index = Mesh->VertexCount - 1;
+		}
+
+		if(T->Vertex0Index == E.Vertex1Index)
+		{
+			T->Vertex0Index = Mesh->VertexCount - 1;
+		}
+		else if(T->Vertex1Index == E.Vertex1Index)
+		{
+			T->Vertex1Index = Mesh->VertexCount - 1;
+		}
+		else if(T->Vertex2Index == E.Vertex1Index)
+		{
+			T->Vertex2Index = Mesh->VertexCount - 1;
+		}
+	}
+
+	if(E.Vertex1Index == Mesh->VertexCount - 1)
+	{
+		DeleteVertex(Mesh, E.Vertex0Index);
+		DeleteVertex(Mesh, E.Vertex0Index);
+	}
+	else
+	{
+		DeleteVertex(Mesh, E.Vertex0Index);
+		DeleteVertex(Mesh, E.Vertex1Index);
+	}
 }
 
 mesh ParseOFF(const char* Filename)
@@ -184,11 +364,15 @@ int main(int ArgumentCount, char** Arguments)
 		printf("You should give more arguments.\nTerminating.");
 		return(1);
 	}
+	srand(time(0));
 
-	mesh InputMesh = ParseOFF(Arguments[1]);
-	printf("The input mesh contains %d vertices.", InputMesh.VertexCount);
+	mesh Mesh = ParseOFF(Arguments[1]);
+	printf("The input mesh contains %d vertices.", Mesh.VertexCount);
 
-	SaveOFF(&InputMesh, "output.off");
+	edge E = RandomEdge(&Mesh);
+	ContractEdge(&Mesh, E);
+
+	SaveOFF(&Mesh, "output.off");
 
 	return(0);
 }
