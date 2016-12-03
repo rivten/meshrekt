@@ -35,11 +35,13 @@ typedef size_t memory_index;
 
 /*
  * TODO(hugo)
- *      * Perform GH algorithm
  *      * Compute one face planarity score
  *      * Compute planar proxies
  *      * Display planar proxies
  *      * Compute SAMD quadric heuristic
+ *
+ *      BUG:
+ *      * there seems to be problems such as edge flipping or connectivity. Investigate
  */
 
 typedef v3 vertex;
@@ -72,6 +74,21 @@ struct contraction
 };
 
 #define MAX_VERTEX_COUNT 1000
+struct contraction_queue
+{
+	contraction Contractions[3 * MAX_VERTEX_COUNT];
+	u32 ContractionCount;
+};
+
+void DeleteContraction(contraction_queue* Queue, u32 DeletedIndex)
+{
+	for(u32 ContractionIndex = DeletedIndex; ContractionIndex < Queue->ContractionCount - 1; ++ContractionIndex)
+	{
+		Queue->Contractions[ContractionIndex] = Queue->Contractions[ContractionIndex + 1];
+	}
+	Queue->ContractionCount--;
+}
+
 struct mesh
 {
 	vertex Vertices[MAX_VERTEX_COUNT];
@@ -167,7 +184,7 @@ bool TriangleContainsEdge(triangle T, edge E)
 	return(false);
 }
 
-void FindTrianglesIncidentToEdge(mesh* Mesh, edge E, u32* T0Index, u32* T1Index)
+bool FindTrianglesIncidentToEdge(mesh* Mesh, edge E, u32* T0Index, u32* T1Index)
 {
 	bool Found0 = false;
 	bool Found1 = false;
@@ -185,7 +202,7 @@ void FindTrianglesIncidentToEdge(mesh* Mesh, edge E, u32* T0Index, u32* T1Index)
 			{
 				Found1 = true;
 				*T1Index = TriangleIndex;
-				return;
+				return(true);
 			}
 			else
 			{
@@ -193,16 +210,22 @@ void FindTrianglesIncidentToEdge(mesh* Mesh, edge E, u32* T0Index, u32* T1Index)
 			}
 		}
 	}
-	InvalidCodePath;
+	return(false);
 }
 
-void ContractEdge(mesh* Mesh, edge E)
+void ContractEdge(mesh* Mesh, edge E, vertex OptimalPos, contraction_queue* Queue)
 {
 	vertex V0 = Mesh->Vertices[E.Vertex0Index];
 	vertex V1 = Mesh->Vertices[E.Vertex1Index];
 	u32 T0Index = 0;
 	u32 T1Index = 0;
-	FindTrianglesIncidentToEdge(Mesh, E, &T0Index, &T1Index);
+
+	if(!FindTrianglesIncidentToEdge(Mesh, E, &T0Index, &T1Index))
+	{
+		// TODO(hugo) : Here is a simplification : if we couldn't find the triangle (for example, we are using a edge border), then we don't perform the contraction
+		Queue->ContractionCount--;
+		return;
+	}
 
 	if(T1Index == Mesh->TriangleCount - 1)
 	{
@@ -215,12 +238,7 @@ void ContractEdge(mesh* Mesh, edge E)
 		DeleteTriangle(Mesh, T1Index);
 	}
 
-	vertex VFinal = {};
-	VFinal.x = 0.5f * (V0.x + V1.x);
-	VFinal.y = 0.5f * (V0.y + V1.y);
-	VFinal.z = 0.5f * (V0.z + V1.z);
-
-	PushVertex(Mesh, VFinal);
+	PushVertex(Mesh, OptimalPos);
 
 	// NOTE(hugo) : Remplacing all occurences of V0 and V1 in triangles by VF (the last point added to the mesh)
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
@@ -255,13 +273,44 @@ void ContractEdge(mesh* Mesh, edge E)
 
 	if(E.Vertex1Index == Mesh->VertexCount - 1)
 	{
+		InvalidCodePath; // TODO(hugo) : Handle this. We need to delete the proper contraction in the queue
 		DeleteVertex(Mesh, E.Vertex0Index);
 		DeleteVertex(Mesh, E.Vertex0Index);
 	}
 	else
 	{
 		DeleteVertex(Mesh, E.Vertex0Index);
+		for(u32 ContractionIndex = 0; ContractionIndex < Queue->ContractionCount; ++ContractionIndex)
+		{
+			contraction C = Queue->Contractions[ContractionIndex];
+			if(C.Edge.Vertex0Index == E.Vertex0Index || C.Edge.Vertex1Index == E.Vertex0Index)
+			{
+				DeleteContraction(Queue, ContractionIndex);
+				ContractionIndex--;
+			}
+		}
+
 		DeleteVertex(Mesh, E.Vertex1Index);
+
+		// NOTE(hugo) : need to update the contraction queue
+		// The previous vertex at index Mesh->VertexCount (last one) is now at the place of E.Vertex1Index
+		for(u32 ContractionIndex = 0; ContractionIndex < Queue->ContractionCount; ++ContractionIndex)
+		{
+			contraction C = Queue->Contractions[ContractionIndex];
+			if(C.Edge.Vertex0Index == Mesh->VertexCount)
+			{
+				C.Edge.Vertex0Index = E.Vertex1Index;
+			}
+			else if(C.Edge.Vertex1Index == Mesh->VertexCount)
+			{
+				C.Edge.Vertex1Index = E.Vertex1Index;
+			}
+			else if(C.Edge.Vertex0Index == E.Vertex1Index || C.Edge.Vertex1Index == E.Vertex1Index)
+			{
+				DeleteContraction(Queue, ContractionIndex);
+				ContractionIndex--;
+			}
+		}
 	}
 }
 
@@ -302,12 +351,6 @@ float MeanDistance(mesh* A, mesh* B)
 
 	return(Maxf(DistFromAToB, DistFromBToA));
 }
-
-struct contraction_queue
-{
-	contraction Contractions[3 * MAX_VERTEX_COUNT];
-	u32 ContractionCount;
-};
 
 void PushContraction(contraction_queue* Queue, contraction C)
 {
@@ -544,7 +587,19 @@ int main(int ArgumentCount, char** Arguments)
 	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
 	contraction_queue Queue = {};
+	printf("Computing contractions\n");
 	ComputeContractions(&Mesh, &Queue);
+
+	u32 ContractionGoal = 1000;
+	printf("Contracting\n");
+	for(u32 ContractionIndex = 0; (ContractionIndex < ContractionGoal) && (Queue.ContractionCount > 0); ++ContractionIndex)
+	{
+		contraction C = Queue.Contractions[Queue.ContractionCount - 1];
+		// TODO(hugo) : Here the contraction deletes a lot of other possible contractions.
+		// When we contract an edge, this creates numerous other edges that could be added in the queue to be 
+		// processed at a further time.
+		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, &Queue);
+	}
 
 	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
 	printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
