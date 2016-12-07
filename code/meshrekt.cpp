@@ -442,11 +442,6 @@ mat4 ComputeQuadric(mesh* Mesh, u32 VertexIndex)
 
 void ComputeCostAndVertexOfContraction(mesh* Mesh, contraction* C, mat4 Quadric)
 {
-	SetValue(&Quadric, 3, 0, 0);
-	SetValue(&Quadric, 3, 1, 0);
-	SetValue(&Quadric, 3, 2, 0);
-	SetValue(&Quadric, 3, 3, 1);
-
 	if(Det(Quadric) == 0)
 	{
 		// NOTE(hugo) : The quadric is not invertible, fall back to a simple plan
@@ -456,8 +451,12 @@ void ComputeCostAndVertexOfContraction(mesh* Mesh, contraction* C, mat4 Quadric)
 	{
 		v4 Solution = Inverse(Quadric) * V4(0.0f, 0.0f, 0.0f, 1.0f);
 		C->OptimalVertex = {Solution.x, Solution.y, Solution.z};
+		Assert(Solution.w != 0.0f);
+		C->OptimalVertex /= Solution.w;
 	}
-	C->Cost = Dot(ToV4(C->OptimalVertex), Quadric * ToV4(C->OptimalVertex));
+	v4 V = ToV4(C->OptimalVertex);
+	V.w = 0.0f;
+	C->Cost = Dot(V, Quadric * V);
 }
 
 void ComputeContractions(mesh* Mesh, contraction_queue* Queue)
