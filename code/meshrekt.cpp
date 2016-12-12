@@ -36,6 +36,7 @@ typedef size_t memory_index;
 #define ReAllocateArray(Buffer, Type, Size) (Type *)ReAllocate_(Buffer, Size * sizeof(Type))
 #define AllocateArray(Type, Size) (Type *)Allocate_(Size * sizeof(Type))
 #define Free(Buffer) free(Buffer)
+#define CopyArray(Dest, Source, Type, Size) memcpy(Dest, Source, Size * sizeof(Type))
 
 void* Allocate_(size_t Size)
 {
@@ -120,6 +121,23 @@ struct mesh
 	u32 TriangleCount;
 	u32 TrianglePoolSize;
 };
+
+mesh CopyMesh(mesh* Mesh)
+{
+	mesh Result = {};
+
+	Result.Vertices = AllocateArray(vertex, Mesh->VertexCount);
+	Result.VertexCount = Mesh->VertexCount;
+	Result.VertexPoolSize = Mesh->VertexPoolSize;
+	CopyArray(Result.Vertices, Mesh->Vertices, vertex, Result.VertexCount);
+
+	Result.Triangles = AllocateArray(triangle, Mesh->TriangleCount);
+	Result.TriangleCount = Mesh->TriangleCount;
+	Result.TrianglePoolSize = Mesh->TrianglePoolSize;
+	CopyArray(Result.Triangles, Mesh->Triangles, triangle, Result.TriangleCount);
+
+	return(Result);
+}
 
 void PushVertex(mesh* Mesh, vertex V)
 {
@@ -624,9 +642,8 @@ int main(int ArgumentCount, char** Arguments)
 	mesh Mesh = ParseOFF(Arguments[1]);
 
 	// NOTE(hugo): Copying the mesh to compute the distance between our mesh and the input one
-	// TODO(hugo) : Re-do mesh copy in the new memory framework
-	//mesh InputMesh = Mesh;
-	//printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
+	mesh InputMesh = CopyMesh(&Mesh);
+	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
 	contraction_queue Queue = {};
 	Queue.ContractionPoolSize = 1;
@@ -646,8 +663,8 @@ int main(int ArgumentCount, char** Arguments)
 		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, &Queue);
 	}
 
-	//float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
-	//printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
+	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
+	printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
 
 	SaveOFF(&Mesh, "output.off");
 
