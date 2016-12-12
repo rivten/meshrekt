@@ -456,14 +456,14 @@ mat4 ComputeQuadric(mesh* Mesh, u32 VertexIndex)
 	mat4 Quadric = {};
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
 	{
-		triangle T = Mesh->Triangles[TriangleIndex];
-		if((T.Vertex0Index == VertexIndex) || (T.Vertex1Index == VertexIndex) || (T.Vertex2Index == VertexIndex))
+		triangle* T = Mesh->Triangles + TriangleIndex;
+		if((T->Vertex0Index == VertexIndex) || (T->Vertex1Index == VertexIndex) || (T->Vertex2Index == VertexIndex))
 		{
 			// NOTE(hugo) : Computing the plane equation of the triangle : ax + by + cz + d = 0 
 			// with a*a + b*b + c*c = 1
-			vertex A = Mesh->Vertices[T.VertexIndices[0]];
-			vertex B = Mesh->Vertices[T.VertexIndices[1]];
-			vertex C = Mesh->Vertices[T.VertexIndices[2]];
+			vertex A = Mesh->Vertices[T->VertexIndices[0]];
+			vertex B = Mesh->Vertices[T->VertexIndices[1]];
+			vertex C = Mesh->Vertices[T->VertexIndices[2]];
 			vertex N = Normalized(Cross(B - A, C - A));
 			float d = - Dot(N, A);
 			mat4 PlaneQuadric = {};
@@ -505,26 +505,63 @@ void ComputeCostAndVertexOfContraction(mesh* Mesh, contraction* C, mat4 Quadric)
 	{
 		v4 Solution = Inverse(Quadric) * V4(0.0f, 0.0f, 0.0f, 1.0f);
 		C->OptimalVertex = {Solution.x, Solution.y, Solution.z};
-		Assert(Solution.w != 0.0f);
-		C->OptimalVertex /= Solution.w;
+		if(Solution.w != 0.0f)
+		{
+			C->OptimalVertex /= Solution.w;
+		}
+		else
+		{
+			// TODO(hugo) : Find out why I fall into this case sometimes
+			C->OptimalVertex = 0.5f * (Mesh->Vertices[C->Edge.Vertex0Index] + Mesh->Vertices[C->Edge.Vertex1Index]);
+		}
 	}
 	v4 V = ToV4(C->OptimalVertex);
 	V.w = 0.0f;
 	C->Cost = Dot(V, Quadric * V);
 }
 
+bool IsEdgeInQueue(edge E, contraction_queue* Queue)
+{
+	for(u32 ContractionIndex = 0; ContractionIndex < Queue->ContractionCount; ++ContractionIndex)
+	{
+		contraction* C = Queue->Contractions + ContractionIndex;
+		u32 ContVertex0Index = C->Edge.Vertex0Index;
+		u32 ContVertex1Index = C->Edge.Vertex1Index;
+
+		if((ContVertex0Index == E.Vertex0Index && ContVertex1Index == E.Vertex1Index)
+				|| (ContVertex0Index == E.Vertex1Index && ContVertex1Index == E.Vertex0Index))
+		{
+			return(true);
+		}
+	}
+
+	return(false);
+}
+
 void ComputeContractions(mesh* Mesh, contraction_queue* Queue)
 {
-	for(u32 Vertex0Index = 0; Vertex0Index < Mesh->VertexCount - 1; ++Vertex0Index)
+	mat4* Quadrics = AllocateArray(mat4, Mesh->VertexCount);
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
 	{
-		for(u32 Vertex1Index = Vertex0Index + 1; Vertex1Index < Mesh->VertexCount; ++Vertex1Index)
+		triangle* T = Mesh->Triangles + TriangleIndex;
+
+		for(u32 i = 0; i < 3; ++i)
 		{
-			if(IsEdgeInMesh(Mesh, Vertex0Index, Vertex1Index))
+			edge E = {T->VertexIndices[i], T->VertexIndices[(i + 1) % 3]};
+			if(!IsEdgeInQueue(E, Queue))
 			{
 				contraction C = {};
-				C.Edge = {Vertex0Index, Vertex1Index};
-				// TODO(hugo) : Can be improved by storing a list of quadric per vertices
-				mat4 Quadric = ComputeQuadric(Mesh, Vertex0Index) + ComputeQuadric(Mesh, Vertex1Index);
+				C.Edge = E;
+				if(!(Quadrics + E.Vertex0Index))
+				{
+					Quadrics[E.Vertex0Index] = ComputeQuadric(Mesh, E.Vertex0Index);
+				}
+				if(!(Quadrics + E.Vertex1Index))
+				{
+					Quadrics[E.Vertex1Index] = ComputeQuadric(Mesh, E.Vertex1Index);
+				}
+
+				mat4 Quadric = Quadrics[E.Vertex0Index] + Quadrics[E.Vertex1Index];
 				ComputeCostAndVertexOfContraction(Mesh, &C, Quadric);
 
 				// NOTE(hugo) : inserting the contraction in the list (the list is in decreasing order)
@@ -532,6 +569,7 @@ void ComputeContractions(mesh* Mesh, contraction_queue* Queue)
 			}
 		}
 	}
+	Free(Quadrics);
 }
 
 mesh ParseOFF(const char* Filename)
@@ -652,9 +690,9 @@ int main(int ArgumentCount, char** Arguments)
 	printf("Computing contractions\n");
 	ComputeContractions(&Mesh, &Queue);
 
-	u32 ContractionGoal = 1000;
+	//u32 ContractionGoal = 1000;
 	printf("Contracting\n");
-	for(u32 ContractionIndex = 0; (ContractionIndex < ContractionGoal) && (Queue.ContractionCount > 0); ++ContractionIndex)
+	for(u32 ContractionIndex = 0; Queue.ContractionCount > 0; ++ContractionIndex)
 	{
 		contraction C = Queue.Contractions[Queue.ContractionCount - 1];
 		// TODO(hugo) : Here the contraction deletes a lot of other possible contractions.
@@ -663,8 +701,10 @@ int main(int ArgumentCount, char** Arguments)
 		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, &Queue);
 	}
 
+#if 0
 	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
 	printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
+#endif
 
 	SaveOFF(&Mesh, "output.off");
 
