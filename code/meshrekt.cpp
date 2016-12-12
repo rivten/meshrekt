@@ -35,6 +35,7 @@ typedef size_t memory_index;
 
 #define ReAllocateArray(Buffer, Type, Size) (Type *)ReAllocate_(Buffer, Size * sizeof(Type))
 #define AllocateArray(Type, Size) (Type *)Allocate_(Size * sizeof(Type))
+#define Free(Buffer) free(Buffer)
 
 void* Allocate_(size_t Size)
 {
@@ -109,25 +110,35 @@ void DeleteContraction(contraction_queue* Queue, u32 DeletedIndex)
 	Queue->ContractionCount--;
 }
 
-#define MAX_VERTEX_COUNT 1000
 struct mesh
 {
-	vertex Vertices[MAX_VERTEX_COUNT];
+	vertex* Vertices;
 	u32 VertexCount;
-	triangle Triangles[MAX_VERTEX_COUNT];
+	u32 VertexPoolSize;
+
+	triangle* Triangles;
 	u32 TriangleCount;
+	u32 TrianglePoolSize;
 };
 
 void PushVertex(mesh* Mesh, vertex V)
 {
-	Assert(Mesh->VertexCount < ArrayCount(Mesh->Vertices));
+	if(Mesh->VertexCount == Mesh->VertexPoolSize)
+	{
+		Mesh->Vertices = ReAllocateArray(Mesh->Vertices, vertex, 2 * Mesh->VertexPoolSize);
+		Mesh->VertexPoolSize *= 2;
+	}
 	Mesh->Vertices[Mesh->VertexCount] = V;
 	Mesh->VertexCount++;
 }
 
 void PushTriangle(mesh* Mesh, triangle T)
 {
-	Assert(Mesh->TriangleCount < ArrayCount(Mesh->Triangles));
+	if(Mesh->TriangleCount == Mesh->TrianglePoolSize)
+	{
+		Mesh->Triangles = ReAllocateArray(Mesh->Triangles, triangle, 2 * Mesh->TrianglePoolSize);
+		Mesh->TrianglePoolSize *= 2;
+	}
 	Mesh->Triangles[Mesh->TriangleCount] = T;
 	Mesh->TriangleCount++;
 }
@@ -532,6 +543,12 @@ mesh ParseOFF(const char* Filename)
 		}
 	}
 
+	Result.Vertices = AllocateArray(vertex, RealVertexCount);
+	Result.VertexPoolSize = RealVertexCount;
+
+	Result.Triangles = AllocateArray(triangle, RealTriangleCount);
+	Result.TrianglePoolSize = RealTriangleCount;
+
 	for(u32 VertexIndex = 0; VertexIndex < RealVertexCount; ++VertexIndex)
 	{
 		Assert(fgets(Line, ArrayCount(Line), File));
@@ -607,8 +624,9 @@ int main(int ArgumentCount, char** Arguments)
 	mesh Mesh = ParseOFF(Arguments[1]);
 
 	// NOTE(hugo): Copying the mesh to compute the distance between our mesh and the input one
-	mesh InputMesh = Mesh;
-	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
+	// TODO(hugo) : Re-do mesh copy in the new memory framework
+	//mesh InputMesh = Mesh;
+	//printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
 	contraction_queue Queue = {};
 	Queue.ContractionPoolSize = 1;
@@ -628,10 +646,14 @@ int main(int ArgumentCount, char** Arguments)
 		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, &Queue);
 	}
 
-	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
-	printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
+	//float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
+	//printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
 
 	SaveOFF(&Mesh, "output.off");
+
+	Free(Queue.Contractions);
+	Free(Mesh.Vertices);
+	Free(Mesh.Triangles);
 
 	return(0);
 }
