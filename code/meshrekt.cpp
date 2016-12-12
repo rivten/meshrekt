@@ -33,6 +33,25 @@ typedef size_t memory_index;
 
 #include "rivten_math.h"
 
+#define ReAllocateArray(Buffer, Type, Size) (Type *)ReAllocate_(Buffer, Size * sizeof(Type))
+#define AllocateArray(Type, Size) (Type *)Allocate_(Size * sizeof(Type))
+
+void* Allocate_(size_t Size)
+{
+	void* Result = malloc(Size);
+	Assert(Result);
+
+	return(Result);
+}
+
+void* ReAllocate_(void* Buffer, size_t Size)
+{
+	void* Result = realloc(Buffer, Size);
+	Assert(Result);
+
+	return(Result);
+}
+
 /*
  * TODO(hugo)
  *      * Compute one face planarity score
@@ -42,6 +61,7 @@ typedef size_t memory_index;
  *
  *      BUG:
  *      * there seems to be problems such as edge flipping or connectivity. Investigate
+ *      * handle bigger meshes (for now, memory allocation issues when the vertex count is too big)
  */
 
 typedef v3 vertex;
@@ -73,11 +93,11 @@ struct contraction
 	vertex OptimalVertex;
 };
 
-#define MAX_VERTEX_COUNT 1000
 struct contraction_queue
 {
-	contraction Contractions[3 * MAX_VERTEX_COUNT];
+	contraction* Contractions;
 	u32 ContractionCount;
+	u32 ContractionPoolSize;
 };
 
 void DeleteContraction(contraction_queue* Queue, u32 DeletedIndex)
@@ -89,6 +109,7 @@ void DeleteContraction(contraction_queue* Queue, u32 DeletedIndex)
 	Queue->ContractionCount--;
 }
 
+#define MAX_VERTEX_COUNT 1000
 struct mesh
 {
 	vertex Vertices[MAX_VERTEX_COUNT];
@@ -354,7 +375,11 @@ float MeanDistance(mesh* A, mesh* B)
 
 void PushContraction(contraction_queue* Queue, contraction C)
 {
-	Assert(Queue->ContractionCount < ArrayCount(Queue->Contractions));
+	if(Queue->ContractionCount + 1 == Queue->ContractionPoolSize)
+	{
+		Queue->Contractions = ReAllocateArray(Queue->Contractions, contraction, 2 * Queue->ContractionPoolSize);
+		Queue->ContractionPoolSize *= 2;
+	}
 
 	if(Queue->ContractionCount == 0)
 	{
@@ -586,6 +611,9 @@ int main(int ArgumentCount, char** Arguments)
 	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
 	contraction_queue Queue = {};
+	Queue.ContractionPoolSize = 1;
+	Queue.Contractions = AllocateArray(contraction, Queue.ContractionPoolSize);
+	Queue.ContractionCount = 0;
 	printf("Computing contractions\n");
 	ComputeContractions(&Mesh, &Queue);
 
