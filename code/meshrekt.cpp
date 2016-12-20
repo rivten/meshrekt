@@ -73,6 +73,30 @@ struct mesh
 	u32 TrianglePoolSize;
 };
 
+struct triangle_index_list
+{
+	u32 TriangleCount;
+	// TODO(hugo): Make this variable
+	u32 TriangleIndices[40];
+};
+
+void ComputeReverseTriangleIndices(mesh* Mesh, 
+		triangle_index_list* ReverseTriangleIndices)
+{
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		triangle* T = Mesh->Triangles + TriangleIndex;
+		for(u32 i = 0; i < 3; ++i)
+		{
+			u32 VertexIndex = T->VertexIndices[i];
+			u32 TriangleCount = ReverseTriangleIndices[VertexIndex].TriangleCount;
+			Assert(TriangleCount < 40);
+			ReverseTriangleIndices[VertexIndex].TriangleIndices[TriangleCount] = TriangleIndex;
+			++ReverseTriangleIndices[VertexIndex].TriangleCount;
+		}
+	}
+}
+
 mesh CopyMesh(mesh* Mesh)
 {
 	mesh Result = {};
@@ -250,74 +274,23 @@ void PushContraction(contraction_queue* Queue, contraction C)
 	}
 }
 
-mat4 ComputeQuadric(mesh* Mesh, u32 VertexIndex)
+mat4 ComputeQuadric(u32 VertexIndex, mat4* Quadrics, triangle_index_list* ReverseTriangleIndices)
 {
-	mat4 Quadric = {};
-	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	mat4 Result = {};
+	triangle_index_list* TriangleList = ReverseTriangleIndices + VertexIndex;
+	for(u32 TriangleIndexIndex = 0; TriangleIndexIndex < TriangleList->TriangleCount; ++TriangleIndexIndex)
 	{
-		triangle* T = Mesh->Triangles + TriangleIndex;
-		if((T->Vertex0Index == VertexIndex) || (T->Vertex1Index == VertexIndex) || (T->Vertex2Index == VertexIndex))
-		{
-			// NOTE(hugo) : Computing the plane equation of the triangle : ax + by + cz + d = 0 
-			// with a*a + b*b + c*c = 1
-			vertex A = Mesh->Vertices[T->VertexIndices[0]];
-			vertex B = Mesh->Vertices[T->VertexIndices[1]];
-			vertex C = Mesh->Vertices[T->VertexIndices[2]];
-			vertex N = Normalized(Cross(B - A, C - A));
-			float d = - Dot(N, A);
-			mat4 PlaneQuadric = {};
-			SetValue(&PlaneQuadric, 0, 0, N.x * N.x);
-			SetValue(&PlaneQuadric, 0, 1, N.x * N.y);
-			SetValue(&PlaneQuadric, 0, 2, N.x * N.z);
-			SetValue(&PlaneQuadric, 0, 3, N.x * d);
-
-			SetValue(&PlaneQuadric, 1, 0, N.y * N.x);
-			SetValue(&PlaneQuadric, 1, 1, N.y * N.y);
-			SetValue(&PlaneQuadric, 1, 2, N.y * N.z);
-			SetValue(&PlaneQuadric, 1, 3, N.y * d);
-
-			SetValue(&PlaneQuadric, 2, 0, N.z * N.x);
-			SetValue(&PlaneQuadric, 2, 1, N.z * N.y);
-			SetValue(&PlaneQuadric, 2, 2, N.z * N.z);
-			SetValue(&PlaneQuadric, 2, 3, N.z * d);
-
-			SetValue(&PlaneQuadric, 3, 0, d * N.x);
-			SetValue(&PlaneQuadric, 3, 1, d * N.y);
-			SetValue(&PlaneQuadric, 3, 2, d * N.z);
-			SetValue(&PlaneQuadric, 3, 3, d * d);
-
-			Quadric += PlaneQuadric;
-		}
+		u32 TriangleIndex = TriangleList->TriangleIndices[TriangleIndexIndex];
+		Result += Quadrics[TriangleIndex];
 	}
 
-	return(Quadric);
+	return(Result);
 }
 
 void ComputeCostAndVertexOfContraction(mesh* Mesh, 
 		contraction* C, 
 		mat4 Quadric)
 {
-#if 0
-	if(Det(Quadric) == 0)
-	{
-		// NOTE(hugo) : The quadric is not invertible, fall back to a simple plan
-		C->OptimalVertex = 0.5f * (Mesh->Vertices[C->Edge.Vertex0Index] + Mesh->Vertices[C->Edge.Vertex1Index]);
-	}
-	else
-	{
-		v4 Solution = Inverse(Quadric) * V4(0.0f, 0.0f, 0.0f, 1.0f);
-		C->OptimalVertex = {Solution.x, Solution.y, Solution.z};
-		if(Solution.w != 0.0f)
-		{
-			C->OptimalVertex /= Solution.w;
-		}
-		else
-		{
-			// TODO(hugo) : Find out why I fall into this case sometimes
-			C->OptimalVertex = 0.5f * (Mesh->Vertices[C->Edge.Vertex0Index] + Mesh->Vertices[C->Edge.Vertex1Index]);
-		}
-	}
-#else
 	// NOTE(hugo) : We are solving the quadric equation given by
 	//     Av = f
 	v4 f = {};
@@ -354,11 +327,9 @@ void ComputeCostAndVertexOfContraction(mesh* Mesh,
 		C->OptimalVertex = Solution.xyz;
 	}
 
-#endif
 	v4 V = ToV4(C->OptimalVertex);
 	V.w = 1.0f;
 	C->Cost = Dot(V, Quadric * V);
-	//Assert(C->Cost >= 0.0f);
 }
 
 bool IsMeshValid(mesh* Mesh, vertex OptimalPos)
@@ -397,69 +368,211 @@ bool IsMeshValid(mesh* Mesh)
 	return(true);
 }
 
+bool IsBoundary(edge E,
+		triangle_index_list* ReverseTriangleIndices,
+		u32* T0Index = 0, u32* T1Index = 0)
+{
+	u32 Vertex0Index = E.Vertex0Index;
+	u32 Vertex1Index = E.Vertex1Index;
+	bool FoundFirstTriangle = false;
+	bool IsBoundary = true;
+	for(u32 Triangle0Index = 0; (IsBoundary) && (Triangle0Index < ReverseTriangleIndices[Vertex0Index].TriangleCount); ++Triangle0Index)
+	{
+		u32 T0 = ReverseTriangleIndices[Vertex0Index].TriangleIndices[Triangle0Index];
+		for(u32 Triangle1Index = 0; Triangle1Index < ReverseTriangleIndices[Vertex1Index].TriangleCount; ++Triangle1Index)
+		{
+			u32 T1 = ReverseTriangleIndices[Vertex1Index].TriangleIndices[Triangle1Index];
+			if(T0 == T1)
+			{
+				if(!FoundFirstTriangle)
+				{
+					FoundFirstTriangle = true;
+					if(T0Index)
+					{
+						*T0Index = T0;
+					}
+				}
+				else
+				{
+					IsBoundary = false;
+					if(T1Index)
+					{
+						*T1Index = T1;
+					}
+				}
+				break;
+			}
+		}
+	}
+	Assert(FoundFirstTriangle);
+	return(IsBoundary);
+}
+
+// TODO(hugo) : Can be improved because we know
+// the vertices of the deleted triangle via the mesh
+// TODO(hugo) : This code is wrooooong
+#if 0
+void UpdateReverseTriangleListAfterDeletion(
+		triangle_index_list* ReverseTriangleIndices, 
+		u32 DeletedIndex, 
+		u32 VertexCount,
+		u32 TriangleCount)
+{
+	for(u32 VertexIndex = 0; VertexIndex < VertexCount; ++VertexIndex)
+	{
+		triangle_index_list* TriangleList = ReverseTriangleIndices + VertexIndex;
+		for(u32 TriangleIndexIndex = 0; TriangleIndexIndex < TriangleList->TriangleCount; ++TriangleIndexIndex)
+		{
+			u32 TriangleIndex = TriangleList->TriangleIndices[TriangleIndexIndex];
+			if(TriangleIndex == DeletedIndex)
+			{
+				--TriangleList->TriangleCount;
+				TriangleList->TriangleIndices[TriangleIndexIndex] = TriangleList->TriangleIndices[TriangleList->TriangleCount];
+				--TriangleIndexIndex;
+			}
+			else if(TriangleIndex == TriangleCount)
+			{
+				// NOTE(hugo) : If a vertex points to the last triangle
+				// this triangle is now at the place of the deleted triangle
+				TriangleList->TriangleIndices[TriangleIndexIndex] = DeletedIndex;
+			}
+		}
+	}
+}
+#endif
+
+mat4 GetQuadricOfTriangle(mesh* Mesh, triangle* T)
+{
+	vertex A = Mesh->Vertices[T->VertexIndices[0]];
+	vertex B = Mesh->Vertices[T->VertexIndices[1]];
+	vertex C = Mesh->Vertices[T->VertexIndices[2]];
+	vertex N = Normalized(Cross(B - A, C - A));
+	float d = - Dot(N, A);
+	mat4 Result = {};
+	SetValue(&Result, 0, 0, N.x * N.x);
+	SetValue(&Result, 0, 1, N.x * N.y);
+	SetValue(&Result, 0, 2, N.x * N.z);
+	SetValue(&Result, 0, 3, N.x * d);
+
+	SetValue(&Result, 1, 0, N.y * N.x);
+	SetValue(&Result, 1, 1, N.y * N.y);
+	SetValue(&Result, 1, 2, N.y * N.z);
+	SetValue(&Result, 1, 3, N.y * d);
+
+	SetValue(&Result, 2, 0, N.z * N.x);
+	SetValue(&Result, 2, 1, N.z * N.y);
+	SetValue(&Result, 2, 2, N.z * N.z);
+	SetValue(&Result, 2, 3, N.z * d);
+
+	SetValue(&Result, 3, 0, d * N.x);
+	SetValue(&Result, 3, 1, d * N.y);
+	SetValue(&Result, 3, 2, d * N.z);
+	SetValue(&Result, 3, 3, d * d);
+
+	return(Result);
+}
+
+bool IsTriangleValid(triangle* T)
+{
+	bool Result = !((T->Vertex0Index == T->Vertex1Index) ||
+			(T->Vertex0Index == T->Vertex2Index) ||
+			(T->Vertex1Index == T->Vertex2Index));
+	return(Result);
+}
+
+bool AreTrianglesCorrect(mesh* Mesh, u32* WrongTriangle)
+{
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		triangle* T = Mesh->Triangles + TriangleIndex;
+		if(!IsTriangleValid(T))
+		{
+			if(WrongTriangle)
+			{
+				*WrongTriangle = TriangleIndex;
+			}
+			return(false);
+		}
+	}
+
+	return(true);
+}
+
 void ContractEdge(
 		mesh* Mesh, 
 		edge E, 
 		vertex OptimalPos, 
 		contraction_queue* Queue, 
-		mat4* Quadrics)
+		mat4* Quadrics,
+		triangle_index_list* ReverseTriangleIndices)
 {
 	vertex V0 = Mesh->Vertices[E.Vertex0Index];
 	vertex V1 = Mesh->Vertices[E.Vertex1Index];
 	u32 T0Index = 0;
 	u32 T1Index = 0;
 
-	if(!FindTrianglesIncidentToEdge(Mesh, E, &T0Index, &T1Index))
-	{
-		// TODO(hugo) : Here is a simplification : if we couldn't find the triangle 
-		// (for example, we are using a edge border), then we don't perform the contraction
-		Queue->ContractionCount--;
-		return;
-	}
+	// TODO(hugo) : Optim : this is computed previously, reuse and pass it 
+	// to ContractEdge
+	Assert(!IsBoundary(E, ReverseTriangleIndices, &T0Index, &T1Index));
 
 	if(T1Index == Mesh->TriangleCount - 1)
 	{
 		DeleteTriangle(Mesh, T0Index);
+		Quadrics[T0Index] = Quadrics[Mesh->TriangleCount];
 		DeleteTriangle(Mesh, T0Index);
+		Quadrics[T0Index] = Quadrics[Mesh->TriangleCount];
 	}
 	else
 	{
 		DeleteTriangle(Mesh, T0Index);
+		Quadrics[T0Index] = Quadrics[Mesh->TriangleCount];
 		DeleteTriangle(Mesh, T1Index);
+		Quadrics[T1Index] = Quadrics[Mesh->TriangleCount];
 	}
 
 	PushVertex(Mesh, OptimalPos);
-
-	//Assert(IsMeshValid(Mesh, OptimalPos));
 
 	// NOTE(hugo) : Remplacing all occurences of V0 and V1 in triangles by VF (the last point added to the mesh)
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
 	{
 		triangle* T = Mesh->Triangles + TriangleIndex;
+		Assert(IsTriangleValid(T));
 		if(T->Vertex0Index == E.Vertex0Index)
 		{
 			T->Vertex0Index = Mesh->VertexCount - 1;
+			Assert(IsTriangleValid(T));
+			Quadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 		}
 		else if(T->Vertex1Index == E.Vertex0Index)
 		{
 			T->Vertex1Index = Mesh->VertexCount - 1;
+			Assert(IsTriangleValid(T));
+			Quadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 		}
 		else if(T->Vertex2Index == E.Vertex0Index)
 		{
 			T->Vertex2Index = Mesh->VertexCount - 1;
+			Assert(IsTriangleValid(T));
+			Quadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 		}
 
 		if(T->Vertex0Index == E.Vertex1Index)
 		{
 			T->Vertex0Index = Mesh->VertexCount - 1;
+			Assert(IsTriangleValid(T));
+			Quadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 		}
 		else if(T->Vertex1Index == E.Vertex1Index)
 		{
 			T->Vertex1Index = Mesh->VertexCount - 1;
+			Assert(IsTriangleValid(T));
+			Quadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 		}
 		else if(T->Vertex2Index == E.Vertex1Index)
 		{
 			T->Vertex2Index = Mesh->VertexCount - 1;
+			Assert(IsTriangleValid(T));
+			Quadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 		}
 	}
 
@@ -472,121 +585,15 @@ void ContractEdge(
 	else
 	{
 		DeleteVertex(Mesh, E.Vertex0Index);
-		// NOTE(hugo) : We can compute the new point's quadric right
-		// now since the triangle topology of the new mesh
-		// has been updates just before
-		Quadrics[E.Vertex0Index] = ComputeQuadric(Mesh, E.Vertex0Index);
-
-		contraction_queue AddingQueue = {};
-		AddingQueue.ContractionPoolSize = 1;
-		AddingQueue.Contractions = AllocateArray(contraction, AddingQueue.ContractionPoolSize);
-		AddingQueue.ContractionCount = 0;
-
-		for(u32 ContractionIndex = 0; ContractionIndex < Queue->ContractionCount; ++ContractionIndex)
-		{
-			contraction C = Queue->Contractions[ContractionIndex];
-			if(C.Edge.Vertex0Index == E.Vertex0Index 
-					|| C.Edge.Vertex1Index == E.Vertex0Index)
-			{
-#if 0
-				contraction UpdatedContraction = {};
-				UpdatedContraction.Edge = C.Edge;
-				mat4 Quadric = Quadrics[UpdatedContraction.Edge.Vertex0Index] 
-					+ Quadrics[UpdatedContraction.Edge.Vertex1Index];
-				ComputeCostAndVertexOfContraction(Mesh, 
-						&UpdatedContraction, Quadric);
-
-				// NOTE(hugo): Adding the new contraction the list of 
-				// contractions to be added.
-				if(AddingQueue.ContractionCount == AddingQueue.ContractionPoolSize)
-				{
-					AddingQueue.Contractions = ReAllocateArray(AddingQueue.Contractions, contraction, 2 * AddingQueue.ContractionPoolSize);
-					AddingQueue.ContractionPoolSize *= 2;
-				}
-				AddingQueue.Contractions[AddingQueue.ContractionCount] = UpdatedContraction;
-				AddingQueue.ContractionCount++;
-#endif
-
-				DeleteContraction(Queue, ContractionIndex);
-				ContractionIndex--;
-			}
-		}
-
-#if 0
-		for(u32 AddingContractionIndex = 0; AddingContractionIndex < AddingQueue.ContractionCount; ++AddingContractionIndex)
-		{
-			contraction* C = AddingQueue.Contractions + AddingContractionIndex;
-			PushContraction(Queue, *C);
-		}
-		AddingQueue.ContractionCount = 0;
-#endif
-
 		DeleteVertex(Mesh, E.Vertex1Index);
-		Quadrics[E.Vertex1Index] = Quadrics[Mesh->VertexCount];
 
-		// NOTE(hugo) : need to update the contraction queue
-		// The previous vertex at index Mesh->VertexCount (last one) is now at the place of E.Vertex1Index
-		for(u32 ContractionIndex = 0; ContractionIndex < Queue->ContractionCount; ++ContractionIndex)
-		{
-			contraction C = Queue->Contractions[ContractionIndex];
-			if(C.Edge.Vertex0Index == Mesh->VertexCount)
-			{
-				C.Edge.Vertex0Index = E.Vertex1Index;
-			}
-			else if(C.Edge.Vertex1Index == Mesh->VertexCount)
-			{
-				C.Edge.Vertex1Index = E.Vertex1Index;
-			}
-			else if(C.Edge.Vertex0Index == E.Vertex1Index || C.Edge.Vertex1Index == E.Vertex1Index)
-			{
-#if 0
-				contraction UpdatedContraction = {};
-				if(C.Edge.Vertex0Index == E.Vertex1Index)
-				{
-					UpdatedContraction.Edge = {E.Vertex0Index, C.Edge.Vertex1Index}; // NOTE(hugo): C.Edge.Vertex0Index was v1 which became v' which is now at the old position of v0
-				}
-				else if(C.Edge.Vertex1Index == E.Vertex1Index)
-				{
-					UpdatedContraction.Edge = {C.Edge.Vertex0Index, E.Vertex0Index};
-				}
-				else
-				{
-					InvalidCodePath;
-				}
-
-				mat4 Quadric = Quadrics[UpdatedContraction.Edge.Vertex0Index] 
-					+ Quadrics[UpdatedContraction.Edge.Vertex1Index];
-				ComputeCostAndVertexOfContraction(Mesh, 
-						&UpdatedContraction, Quadric);
-
-				// NOTE(hugo): Adding the new contraction the list of 
-				// contractions to be added.
-				if(AddingQueue.ContractionCount == AddingQueue.ContractionPoolSize)
-				{
-					AddingQueue.Contractions = ReAllocateArray(AddingQueue.Contractions, contraction, 2 * AddingQueue.ContractionPoolSize);
-					AddingQueue.ContractionPoolSize *= 2;
-				}
-				AddingQueue.Contractions[AddingQueue.ContractionCount] = UpdatedContraction;
-				AddingQueue.ContractionCount++;
-#endif
-
-				DeleteContraction(Queue, ContractionIndex);
-				ContractionIndex--;
-			}
-		}
-
-#if 0
-		for(u32 AddingContractionIndex = 0; AddingContractionIndex < AddingQueue.ContractionCount; ++AddingContractionIndex)
-		{
-			contraction* C = AddingQueue.Contractions + AddingContractionIndex;
-			PushContraction(Queue, *C);
-		}
-#endif
-		Free(AddingQueue.Contractions);
+		memset(ReverseTriangleIndices, 0, sizeof(triangle_index_list) * (Mesh->VertexCount + 1));
+		ComputeReverseTriangleIndices(Mesh, ReverseTriangleIndices);
 	}
 }
 
-
+// TODO(hugo) : Get rid of the sqrt because in the article
+// GH use the square distance
 float Distance(vertex V, mesh* Mesh)
 {
 	float MinDistSqrFound = FLT_MAX;
@@ -684,11 +691,11 @@ void ComputeContractions(mesh* Mesh, contraction_queue* Queue, mat4* Quadrics)
 				C.Edge = E;
 				if(IsZeroMatrix(Quadrics[E.Vertex0Index]))
 				{
-					Quadrics[E.Vertex0Index] = ComputeQuadric(Mesh, E.Vertex0Index);
+					//Quadrics[E.Vertex0Index] = ComputeQuadric(Mesh, E.Vertex0Index);
 				}
 				if(IsZeroMatrix(Quadrics[E.Vertex1Index]))
 				{
-					Quadrics[E.Vertex1Index] = ComputeQuadric(Mesh, E.Vertex1Index);
+					//Quadrics[E.Vertex1Index] = ComputeQuadric(Mesh, E.Vertex1Index);
 				}
 
 				mat4 Quadric = Quadrics[E.Vertex0Index] + Quadrics[E.Vertex1Index];
@@ -701,7 +708,9 @@ void ComputeContractions(mesh* Mesh, contraction_queue* Queue, mat4* Quadrics)
 	}
 }
 
-contraction GetBestContraction(mesh* Mesh, mat4* Quadrics)
+contraction GetBestContraction(mesh* Mesh, 
+		mat4* Quadrics, 
+		triangle_index_list* ReverseTriangleIndices)
 {
 	contraction Result = {};
 	Result.Cost = FLT_MAX;
@@ -712,23 +721,19 @@ contraction GetBestContraction(mesh* Mesh, mat4* Quadrics)
 		for(u32 i = 0; i < 3; ++i)
 		{
 			edge E = {T->VertexIndices[i], T->VertexIndices[(i + 1) % 3]};
-			contraction C = {};
-			C.Edge = E;
-			if(IsZeroMatrix(Quadrics[E.Vertex0Index]))
+			if(!IsBoundary(E, ReverseTriangleIndices))
 			{
-				Quadrics[E.Vertex0Index] = ComputeQuadric(Mesh, E.Vertex0Index);
-			}
-			if(IsZeroMatrix(Quadrics[E.Vertex1Index]))
-			{
-				Quadrics[E.Vertex1Index] = ComputeQuadric(Mesh, E.Vertex1Index);
-			}
+				contraction C = {};
+				C.Edge = E;
 
-			mat4 Quadric = Quadrics[E.Vertex0Index] + Quadrics[E.Vertex1Index];
-			ComputeCostAndVertexOfContraction(Mesh, &C, Quadric);
+				//mat4 Quadric = ComputeQuadrics[E.Vertex0Index] + Quadrics[E.Vertex1Index];
+				mat4 Quadric = ComputeQuadric(E.Vertex0Index, Quadrics, ReverseTriangleIndices) + ComputeQuadric(E.Vertex1Index, Quadrics, ReverseTriangleIndices);
+				ComputeCostAndVertexOfContraction(Mesh, &C, Quadric);
 
-			if(C.Cost < Result.Cost)
-			{
-				Result = C;
+				if(C.Cost < Result.Cost)
+				{
+					Result = C;
+				}
 			}
 		}
 	}
@@ -837,37 +842,9 @@ void ComputeQuadrics(mesh* Mesh, mat4* Quadrics)
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
 	{
 		triangle* T = Mesh->Triangles + TriangleIndex;
+		mat4 PlaneQuadric = GetQuadricOfTriangle(Mesh, T);
 
-		vertex A = Mesh->Vertices[T->VertexIndices[0]];
-		vertex B = Mesh->Vertices[T->VertexIndices[1]];
-		vertex C = Mesh->Vertices[T->VertexIndices[2]];
-		vertex N = Normalized(Cross(B - A, C - A));
-		float d = - Dot(N, A);
-		mat4 PlaneQuadric = {};
-		SetValue(&PlaneQuadric, 0, 0, N.x * N.x);
-		SetValue(&PlaneQuadric, 0, 1, N.x * N.y);
-		SetValue(&PlaneQuadric, 0, 2, N.x * N.z);
-		SetValue(&PlaneQuadric, 0, 3, N.x * d);
-
-		SetValue(&PlaneQuadric, 1, 0, N.y * N.x);
-		SetValue(&PlaneQuadric, 1, 1, N.y * N.y);
-		SetValue(&PlaneQuadric, 1, 2, N.y * N.z);
-		SetValue(&PlaneQuadric, 1, 3, N.y * d);
-
-		SetValue(&PlaneQuadric, 2, 0, N.z * N.x);
-		SetValue(&PlaneQuadric, 2, 1, N.z * N.y);
-		SetValue(&PlaneQuadric, 2, 2, N.z * N.z);
-		SetValue(&PlaneQuadric, 2, 3, N.z * d);
-
-		SetValue(&PlaneQuadric, 3, 0, d * N.x);
-		SetValue(&PlaneQuadric, 3, 1, d * N.y);
-		SetValue(&PlaneQuadric, 3, 2, d * N.z);
-		SetValue(&PlaneQuadric, 3, 3, d * d);
-
-		for(u32 i = 0; i < 3; ++i)
-		{
-			Quadrics[T->VertexIndices[i]] += PlaneQuadric;
-		}
+		Quadrics[TriangleIndex] = PlaneQuadric;
 	}
 }
 
@@ -881,52 +858,37 @@ int main(int ArgumentCount, char** Arguments)
 	srand(time(0));
 
 	mesh Mesh = ParseOFF(Arguments[1]);
-	//Assert(IsMeshValid(&Mesh));
 
 	// NOTE(hugo): Copying the mesh to compute the distance between our mesh and the input one
 	mesh InputMesh = CopyMesh(&Mesh);
 	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
-#if 0
+	u32 ContractionGoal = 300;
 	contraction_queue Queue = {};
-	Queue.ContractionPoolSize = 1;
-	Queue.Contractions = AllocateArray(contraction, Queue.ContractionPoolSize);
-	Queue.ContractionCount = 0;
-	printf("Computing contractions\n");
-	mat4* Quadrics = AllocateArray(mat4, Mesh.VertexCount);
-	memset(Quadrics, 0, sizeof(mat4) * Mesh.VertexCount);
 
-	ComputeContractions(&Mesh, &Queue, Quadrics);
-	printf("Contractions computed. There are %d contractions.\n", Queue.ContractionCount);
+	mat4* Quadrics = AllocateArray(mat4, Mesh.TriangleCount);
+	memset(Quadrics, 0, sizeof(mat4) * Mesh.TriangleCount);
+	ComputeQuadrics(&Mesh, Quadrics);
 
-	printf("Contracting\n");
-	for(u32 ContractionIndex = 0; (Queue.ContractionCount > 0); ++ContractionIndex)
-	{
-		contraction C = Queue.Contractions[Queue.ContractionCount - 1];
-		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, &Queue, Quadrics);
-	}
+	// NOTE(hugo) : +1 because we push the new vertex before deletex the others
+	triangle_index_list* ReverseTriangleIndices = AllocateArray(triangle_index_list, Mesh.VertexCount + 1);	
+	memset(ReverseTriangleIndices, 0, sizeof(triangle_index_list) * (Mesh.VertexCount + 1));
+	ComputeReverseTriangleIndices(&Mesh, ReverseTriangleIndices);
 
-	Free(Quadrics);
-	Free(Queue.Contractions);
-#else
-	u32 ContractionGoal = 500;
-	contraction_queue Queue = {};
 	while(ContractionGoal > 0)
 	{
 		printf("Computing contractions\n");
-		mat4* Quadrics = AllocateArray(mat4, Mesh.VertexCount);
-		memset(Quadrics, 0, sizeof(mat4) * Mesh.VertexCount);
-		ComputeQuadrics(&Mesh, Quadrics);
 
-		contraction C = GetBestContraction(&Mesh, Quadrics);
-		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, &Queue, Quadrics);
+		contraction C = GetBestContraction(&Mesh, Quadrics, ReverseTriangleIndices);
+		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, &Queue, Quadrics, ReverseTriangleIndices);
 		printf("Contraction cost was %f.\n", C.Cost);
-		Free(Quadrics);
 
 		--ContractionGoal;
 		printf("Contraction goal : %i.\n", ContractionGoal);
 	}
-#endif
+
+	Free(ReverseTriangleIndices);
+	Free(Quadrics);
 
 #if 0
 	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
