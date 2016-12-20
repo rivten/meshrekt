@@ -592,8 +592,6 @@ void ContractEdge(
 	}
 }
 
-// TODO(hugo) : Get rid of the sqrt because in the article
-// GH use the square distance
 float Distance(vertex V, mesh* Mesh)
 {
 	float MinDistSqrFound = FLT_MAX;
@@ -607,7 +605,7 @@ float Distance(vertex V, mesh* Mesh)
 		}
 	}
 
-	return(sqrt(MinDistSqrFound));
+	return(MinDistSqrFound);
 }
 
 float MeanDistance(mesh* A, mesh* B)
@@ -863,7 +861,7 @@ int main(int ArgumentCount, char** Arguments)
 	mesh InputMesh = CopyMesh(&Mesh);
 	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
-	u32 ContractionGoal = 300;
+	u32 ContractionGoal = 100;
 	contraction_queue Queue = {};
 
 	mat4* Quadrics = AllocateArray(mat4, Mesh.TriangleCount);
@@ -890,7 +888,7 @@ int main(int ArgumentCount, char** Arguments)
 	Free(ReverseTriangleIndices);
 	Free(Quadrics);
 
-#if 0
+#if 1
 	float DistanceBetweenMeshes = MeanDistance(&InputMesh, &Mesh);
 	printf("Distance between meshes is : %f\n", DistanceBetweenMeshes);
 #endif
