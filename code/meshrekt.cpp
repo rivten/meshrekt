@@ -846,6 +846,153 @@ void ComputeQuadrics(mesh* Mesh, mat4* Quadrics)
 	}
 }
 
+struct plane
+{
+	// NOTE(hugo) : defined by the equation 
+	//           <N, v> + d = 0
+	v3 N;
+	float D;
+};
+
+struct proxy
+{
+	u32 TriangleCount;
+	u32 TriangleIndices[256];
+
+	// NOTE(hugo) : defined by the equation 
+	//           <N, v> + d = 0
+	v3 N;
+	float D;
+};
+
+void PushTriangle(proxy* P, u32 TriangleIndex)
+{
+	Assert(P->TriangleCount < ArrayCount(P->TriangleIndices));
+	P->TriangleIndices[P->TriangleCount] = TriangleIndex;
+	++P->TriangleCount;
+}
+
+bool IsTriangleInProxy(u32 TriangleIndex, proxy* Proxy)
+{
+	bool Found = false;
+	for(u32 Index = 0; (!Found) && (Index < Proxy->TriangleCount); ++Index)
+	{
+		if(Proxy->TriangleIndices[Index] == TriangleIndex)
+		{
+			Found = true;
+		}
+	}
+	return(Found);
+}
+
+bool IsTriangleInProxies(u32 TriangleIndex, proxy* Proxies, u32 ProxyCount)
+{
+	for(u32 ProxyIndex = 0; ProxyIndex < ProxyCount; ++ProxyIndex)
+	{
+		proxy* Proxy = Proxies + ProxyIndex;
+		if(IsTriangleInProxy(TriangleIndex, Proxy))
+		{
+			return(true);
+		}
+	}
+	return(false);
+}
+
+s32 FindBestPlanarTriangle(float* PlanarityScore, u32 Count, proxy* Proxies, u32 ProxyCount)
+{
+	Assert(Count >= 1);
+	float BestScoreFound = PlanarityScore[0];
+	u32 IndexBestFound = 0;
+	bool FoundOne = false;
+
+	for(u32 Index = 0; Index < Count; ++Index)
+	{
+		if(!IsTriangleInProxies(Index, Proxies, ProxyCount))
+		{
+			FoundOne = true;
+			float Score = PlanarityScore[Index];
+			if(Score > BestScoreFound)
+			{
+				BestScoreFound = Score;
+				IndexBestFound = Index;
+			}
+		}
+	}
+
+	if(!FoundOne)
+	{
+		return(-1);
+	}
+	return(IndexBestFound);
+}
+
+bool IsTriangleBoundaryOfProxy(mesh* Mesh, u32 TriangleIndex, proxy* Proxy, triangle_index_list* ReverseTriangleIndices)
+{
+	for(u32 Index = 0; Index < Proxy->TriangleCount; ++Index)
+	{
+		u32 ProxyTriangleIndex = Proxy->TriangleIndices[Index];
+		triangle* T = Mesh->Triangles + ProxyTriangleIndex;
+		for(u32 i = 0; i < 3; ++i)
+		{
+			edge E = {T->VertexIndices[i], T->VertexIndices[(i + 1) % 3]};
+			u32 T0Index;
+			u32 T1Index;
+			if(!IsBoundary(E, ReverseTriangleIndices, &T0Index, &T1Index))
+			{
+				if(T0Index == ProxyTriangleIndex)
+				{
+					if(T1Index == TriangleIndex)
+					{
+						return(true);
+					}
+				}
+				else if(T1Index == ProxyTriangleIndex)
+				{
+					if(T0Index == TriangleIndex)
+					{
+						return(true);
+					}
+				}
+				else
+				{
+					InvalidCodePath;
+				}
+			}
+		}
+	}
+
+	return(false);
+}
+
+s32 FindBestPlanarTriangleWithConstraints(mesh* Mesh, float* PlanarityScore, u32 Count, 
+		proxy* Proxies, u32 ProxyCount, triangle_index_list* ReverseTriangleIndices)
+{
+	float BestScoreFound = -1.0f;
+	u32 BestIndexFound = 0;
+	bool FoundOneNotInProxies = false;
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
+	{
+		if(!IsTriangleInProxies(TriangleIndex, Proxies, ProxyCount))
+		{
+			if(IsTriangleBoundaryOfProxy(Mesh, TriangleIndex, Proxies + (ProxyCount - 1), ReverseTriangleIndices))
+			{
+				FoundOneNotInProxies = true;
+				float TriangleScore = PlanarityScore[TriangleIndex];
+				if(TriangleScore > BestScoreFound)
+				{
+					BestScoreFound = TriangleScore;
+					BestIndexFound = TriangleIndex;
+				}
+			}
+		}
+	}
+	if(!FoundOneNotInProxies)
+	{
+		return(-1);
+	}
+	return(BestIndexFound);
+}
+
 int main(int ArgumentCount, char** Arguments)
 {
 	if(ArgumentCount < 2)
@@ -861,7 +1008,7 @@ int main(int ArgumentCount, char** Arguments)
 	mesh InputMesh = CopyMesh(&Mesh);
 	printf("The input mesh contains %d vertices.\n", Mesh.VertexCount);
 
-	u32 ContractionGoal = 100;
+	u32 ContractionGoal = 5000;
 	contraction_queue Queue = {};
 
 	mat4* Quadrics = AllocateArray(mat4, Mesh.TriangleCount);
@@ -872,6 +1019,108 @@ int main(int ArgumentCount, char** Arguments)
 	triangle_index_list* ReverseTriangleIndices = AllocateArray(triangle_index_list, Mesh.VertexCount + 1);	
 	memset(ReverseTriangleIndices, 0, sizeof(triangle_index_list) * (Mesh.VertexCount + 1));
 	ComputeReverseTriangleIndices(&Mesh, ReverseTriangleIndices);
+
+	// NOTE(hugo) : Planarity score computation
+	v3* TrianglesNormal = AllocateArray(v3, Mesh.TriangleCount);
+	memset(TrianglesNormal, 0, sizeof(v3) * (Mesh.TriangleCount));
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh.TriangleCount; ++TriangleIndex)
+	{
+		triangle* T = Mesh.Triangles + TriangleIndex;
+		v3 P0 = Mesh.Vertices[T->Vertex0Index];
+		v3 P1 = Mesh.Vertices[T->Vertex1Index];
+		v3 P2 = Mesh.Vertices[T->Vertex2Index];
+		v3 N = Normalized(Cross(P1 - P0, P2 - P0));
+		TrianglesNormal[TriangleIndex] = N;
+	}
+
+	float* PlanarityScore = AllocateArray(float, Mesh.TriangleCount);
+	memset(PlanarityScore, 0, sizeof(float) * Mesh.TriangleCount);
+	u32* PlanarityCount = AllocateArray(u32, Mesh.TriangleCount);
+	memset(PlanarityCount, 0, sizeof(u32) * Mesh.TriangleCount);
+	for(u32 TriangleIndex = 0; TriangleIndex < Mesh.TriangleCount; ++TriangleIndex)
+	{
+		triangle* T = Mesh.Triangles + TriangleIndex;
+		for(u32 Index = 0; Index < 3; ++Index)
+		{
+			u32 PointID = T->VertexIndices[Index];
+			triangle_index_list* ReverseTriangleIndex = ReverseTriangleIndices + PointID;
+			for(u32 NeighbourIndex = 0; NeighbourIndex < ReverseTriangleIndex->TriangleCount; ++NeighbourIndex)
+			{
+				// TODO(hugo) : Not perfect since I can consider the same neighbour twice.
+				// Indeed, two vertices can share the same neighbour.
+				u32 NeighbourID = ReverseTriangleIndex->TriangleIndices[NeighbourIndex];
+				if(NeighbourID != TriangleIndex)
+				{
+					PlanarityScore[TriangleIndex] += 
+						Dot(TrianglesNormal[TriangleIndex], TrianglesNormal[NeighbourID]);
+					PlanarityCount[TriangleIndex] += 1;
+				}
+			}
+		}
+		Assert(PlanarityCount[TriangleIndex] != 0);
+		PlanarityScore[TriangleIndex] /= (float(PlanarityCount[TriangleIndex]));
+	}
+
+	float NormalTolerance = 1.5f;
+	float DistanceTolerance = 1.5f;
+	proxy Proxies[128];
+	u32 ProxyCount = 0;
+
+	bool TrianglesLeft = true;
+	while(TrianglesLeft)
+	{
+		u32 BestPlanarTriangleIndex = FindBestPlanarTriangle(PlanarityScore, Mesh.TriangleCount, 
+				&Proxies[0], ProxyCount);
+		if(BestPlanarTriangleIndex != -1)
+		{
+			Assert(ProxyCount < ArrayCount(Proxies));
+			proxy Proxy = {};
+			Proxy.TriangleCount = 1;
+			Proxy.TriangleIndices[0] = BestPlanarTriangleIndex;
+			Proxy.N = TrianglesNormal[BestPlanarTriangleIndex];
+			Proxy.D = - Dot(Proxy.N, Mesh.Vertices[Mesh.Triangles[BestPlanarTriangleIndex].Vertex0Index]);
+			Proxies[ProxyCount] = Proxy;
+			++ProxyCount;
+
+			bool KeepGrowing = true;
+			while(KeepGrowing)
+			{
+				s32 BestIndex = FindBestPlanarTriangleWithConstraints(&Mesh, PlanarityScore, 
+						Mesh.TriangleCount, &Proxies[0], ProxyCount, ReverseTriangleIndices);
+				if(BestIndex == -1)
+				{
+					TrianglesLeft = false;
+					break;
+				}
+				v3 TNormal = TrianglesNormal[BestIndex];
+				// TODO(hugo) : Can be improved by selecting the min or the max of the three vertices
+				float DistanceToProxy = Abs(Dot(Proxy.N, Mesh.Vertices[Mesh.Triangles[BestIndex].Vertex0Index]));
+				if((DistanceToProxy < DistanceTolerance) &&
+						(LengthSqr(TNormal - Proxy.N) < NormalTolerance))
+				{
+					PushTriangle(&Proxies[ProxyCount - 1], BestIndex);
+				}
+				else
+				{
+					KeepGrowing = false;
+				}
+			}
+#if 0
+			// TODO(hugo) : Reject proxy if its area is too small
+			float A = Area(Proxy);
+			if(A < AreaThreshold)
+			{
+			}
+			else
+			{
+			}
+#endif
+		}
+		else
+		{
+			TrianglesLeft = false;
+		}
+	}
 
 	while(ContractionGoal > 0)
 	{
@@ -895,6 +1144,7 @@ int main(int ArgumentCount, char** Arguments)
 
 	SaveOFF(&Mesh, "output.off");
 
+	Free(TrianglesNormal);
 	Free(Mesh.Vertices);
 	Free(Mesh.Triangles);
 	Free(InputMesh.Vertices);
