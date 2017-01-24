@@ -885,20 +885,13 @@ bool IsTriangleInProxy(u32 TriangleIndex, proxy* Proxy)
 	return(Found);
 }
 
-bool IsTriangleInProxies(u32 TriangleIndex, proxy* Proxies, u32 ProxyCount)
+bool IsTriangleInProxies(u32 TriangleIndex, s32* TriangleProxyMap)
 {
-	for(u32 ProxyIndex = 0; ProxyIndex < ProxyCount; ++ProxyIndex)
-	{
-		proxy* Proxy = Proxies + ProxyIndex;
-		if(IsTriangleInProxy(TriangleIndex, Proxy))
-		{
-			return(true);
-		}
-	}
-	return(false);
+	bool Result = (TriangleProxyMap[TriangleIndex] != -1);
+	return(Result);
 }
 
-s32 FindBestPlanarTriangle(float* PlanarityScore, u32 Count, proxy* Proxies, u32 ProxyCount)
+s32 FindBestPlanarTriangle(float* PlanarityScore, u32 Count, s32* TriangleProxyMap)
 {
 	Assert(Count >= 1);
 	float BestScoreFound = PlanarityScore[0];
@@ -907,7 +900,7 @@ s32 FindBestPlanarTriangle(float* PlanarityScore, u32 Count, proxy* Proxies, u32
 
 	for(u32 Index = 0; Index < Count; ++Index)
 	{
-		if(!IsTriangleInProxies(Index, Proxies, ProxyCount))
+		if(!IsTriangleInProxies(Index, TriangleProxyMap))
 		{
 			FoundOne = true;
 			float Score = PlanarityScore[Index];
@@ -965,14 +958,15 @@ bool IsTriangleBoundaryOfProxy(mesh* Mesh, u32 TriangleIndex, proxy* Proxy, tria
 }
 
 s32 FindBestPlanarTriangleWithConstraints(mesh* Mesh, float* PlanarityScore, u32 Count, 
-		proxy* Proxies, u32 ProxyCount, triangle_index_list* ReverseTriangleIndices)
+		proxy* Proxies, u32 ProxyCount, triangle_index_list* ReverseTriangleIndices,
+		s32* TriangleProxyMap)
 {
 	float BestScoreFound = -1.0f;
 	u32 BestIndexFound = 0;
 	bool FoundOneNotInProxies = false;
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
 	{
-		if(!IsTriangleInProxies(TriangleIndex, Proxies, ProxyCount))
+		if(!IsTriangleInProxies(TriangleIndex, TriangleProxyMap))
 		{
 			if(IsTriangleBoundaryOfProxy(Mesh, TriangleIndex, Proxies + (ProxyCount - 1), ReverseTriangleIndices))
 			{
@@ -1061,6 +1055,8 @@ int main(int ArgumentCount, char** Arguments)
 		PlanarityScore[TriangleIndex] /= (float(PlanarityCount[TriangleIndex]));
 	}
 
+	s32* TriangleProxyMap = AllocateArray(s32, Mesh.TriangleCount);
+	memset(TriangleProxyMap, -1, sizeof(s32) * Mesh.TriangleCount);
 	float NormalTolerance = 1.5f;
 	float DistanceTolerance = 1.5f;
 	proxy Proxies[128];
@@ -1070,7 +1066,7 @@ int main(int ArgumentCount, char** Arguments)
 	while(TrianglesLeft)
 	{
 		u32 BestPlanarTriangleIndex = FindBestPlanarTriangle(PlanarityScore, Mesh.TriangleCount, 
-				&Proxies[0], ProxyCount);
+				TriangleProxyMap);
 		if(BestPlanarTriangleIndex != -1)
 		{
 			Assert(ProxyCount < ArrayCount(Proxies));
@@ -1086,7 +1082,8 @@ int main(int ArgumentCount, char** Arguments)
 			while(KeepGrowing)
 			{
 				s32 BestIndex = FindBestPlanarTriangleWithConstraints(&Mesh, PlanarityScore, 
-						Mesh.TriangleCount, &Proxies[0], ProxyCount, ReverseTriangleIndices);
+						Mesh.TriangleCount, &Proxies[0], ProxyCount, ReverseTriangleIndices,
+						TriangleProxyMap);
 				if(BestIndex == -1)
 				{
 					TrianglesLeft = false;
@@ -1099,6 +1096,7 @@ int main(int ArgumentCount, char** Arguments)
 						(LengthSqr(TNormal - Proxy.N) < NormalTolerance))
 				{
 					PushTriangle(&Proxies[ProxyCount - 1], BestIndex);
+					TriangleProxyMap[BestIndex] = ProxyCount - 1;
 				}
 				else
 				{
