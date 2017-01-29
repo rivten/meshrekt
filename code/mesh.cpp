@@ -35,7 +35,7 @@ struct triangle_index_list
 {
 	u32 TriangleCount;
 	// TODO(hugo): Make this variable
-	u32 TriangleIndices[40];
+	u32 TriangleIndices[64];
 };
 
 void ComputeReverseTriangleIndices(mesh* Mesh, 
@@ -48,10 +48,25 @@ void ComputeReverseTriangleIndices(mesh* Mesh,
 		{
 			u32 VertexIndex = T->VertexIndices[i];
 			u32 TriangleCount = ReverseTriangleIndices[VertexIndex].TriangleCount;
-			Assert(TriangleCount < 40);
+			Assert(TriangleCount < 64);
 			ReverseTriangleIndices[VertexIndex].TriangleIndices[TriangleCount] = TriangleIndex;
 			++ReverseTriangleIndices[VertexIndex].TriangleCount;
 		}
+	}
+}
+
+bool IsFaceOfVertex(mesh* Mesh, u32 TriangleIndex, u32 VertexIndex)
+{
+	triangle* T = Mesh->Triangles + TriangleIndex;
+	if((T->VertexIndices[0] == VertexIndex) ||
+			(T->VertexIndices[1] == VertexIndex) ||
+			(T->VertexIndices[2] == VertexIndex))
+	{
+		return(true);
+	}
+	else
+	{
+		return(false);
 	}
 }
 

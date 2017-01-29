@@ -44,7 +44,7 @@ int main(int ArgumentCount, char** Arguments)
 
 	triangles_properties Properties = {};
 	ComputeProperties(&Mesh, &Properties, ReverseTriangleIndices);
-	u32 ContractionGoal = 2000;
+	u32 ContractionGoal = 3000;
 	contraction_queue Queue = {};
 
 	Assert(AreTrianglesValid(&Mesh));

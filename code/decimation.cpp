@@ -108,7 +108,7 @@ void ComputeQuadrics(mesh* Mesh, mat4* TriangleQuadrics,
 			proxy Proxy = Proxies[TriangleProxyMap[TriangleIndex]];
 			mat4 ProxyQuadric = QuadricFromPlane(Proxy.N, Proxy.D);
 
-			TriangleQuadrics[TriangleIndex] = ((1.0f - Lambda) * PlaneQuadric + Lambda * ProxyQuadric);
+			TriangleQuadrics[TriangleIndex] = ((1.0f - Lambda) * PlaneQuadric) + Lambda * ProxyQuadric;
 		}
 		else
 		{
@@ -121,6 +121,7 @@ void ComputeQuadrics(mesh* Mesh, mat4* TriangleQuadrics,
 }
 
 
+#if 0
 void PushContraction(contraction_queue* Queue, contraction C)
 {
 	if(Queue->ContractionCount == Queue->ContractionPoolSize)
@@ -156,6 +157,7 @@ void PushContraction(contraction_queue* Queue, contraction C)
 		Queue->ContractionCount++;
 	}
 }
+#endif
 
 mat4 ComputeQuadric(u32 VertexIndex, mat4* Quadrics, triangle_index_list* ReverseTriangleIndices)
 {
@@ -167,6 +169,28 @@ mat4 ComputeQuadric(u32 VertexIndex, mat4* Quadrics, triangle_index_list* Revers
 		Result += Quadrics[TriangleIndex];
 	}
 
+	return(Result);
+}
+
+mat4 ComputeQuadricFromEdge(mesh* Mesh, edge E, mat4* Quadrics,
+		triangle_index_list* ReverseTriangleIndices)
+{
+	mat4 Result = {};
+	triangle_index_list* TriangleList0 = ReverseTriangleIndices + E.Vertex0Index;
+	for(u32 Index = 0; Index < TriangleList0->TriangleCount; ++Index)
+	{
+		u32 TriangleIndex = TriangleList0->TriangleIndices[Index];
+		Result += Quadrics[TriangleIndex];
+	}
+	triangle_index_list* TriangleList1 = ReverseTriangleIndices + E.Vertex1Index;
+	for(u32 Index = 0; Index < TriangleList1->TriangleCount; ++Index)
+	{
+		u32 TriangleIndex = TriangleList1->TriangleIndices[Index];
+		if(!IsFaceOfVertex(Mesh, TriangleIndex, E.Vertex0Index))
+		{
+			Result += Quadrics[TriangleIndex];
+		}
+	}
 	return(Result);
 }
 
@@ -271,19 +295,15 @@ void ContractEdge(
 	if(T1Index == Mesh->TriangleCount - 1)
 	{
 		DeleteTriangle(Mesh, T0Index);
-		//Properties->InnerQuadrics[T0Index] = Properties->InnerQuadrics[Mesh->TriangleCount];
 		SwitchProperties(Properties, T0Index, Mesh->TriangleCount);
 		DeleteTriangle(Mesh, T0Index);
-		//Properties->InnerQuadrics[T0Index] = Properties->InnerQuadrics[Mesh->TriangleCount];
 		SwitchProperties(Properties, T0Index, Mesh->TriangleCount);
 	}
 	else
 	{
 		DeleteTriangle(Mesh, T0Index);
-		//Properties->InnerQuadrics[T0Index] = Properties->InnerQuadrics[Mesh->TriangleCount];
 		SwitchProperties(Properties, T0Index, Mesh->TriangleCount);
 		DeleteTriangle(Mesh, T1Index);
-		//Properties->InnerQuadrics[T1Index] = Properties->InnerQuadrics[Mesh->TriangleCount];
 		SwitchProperties(Properties, T1Index, Mesh->TriangleCount);
 	}
 	PreProcessMesh(Mesh);
@@ -300,7 +320,6 @@ void ContractEdge(
 			T->Vertex0Index = Mesh->VertexCount - 1;
 			if(IsTriangleValid(T))
 			{
-				Properties->InnerQuadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 				Properties->Areas[TriangleIndex] = GetTriangleArea(Mesh, T);
 				Properties->Normals[TriangleIndex] = GetTriangleNormal(Mesh, T);
 			}
@@ -316,7 +335,6 @@ void ContractEdge(
 			T->Vertex1Index = Mesh->VertexCount - 1;
 			if(IsTriangleValid(T))
 			{
-				Properties->InnerQuadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 				Properties->Areas[TriangleIndex] = GetTriangleArea(Mesh, T);
 				Properties->Normals[TriangleIndex] = GetTriangleNormal(Mesh, T);
 			}
@@ -332,7 +350,6 @@ void ContractEdge(
 			T->Vertex2Index = Mesh->VertexCount - 1;
 			if(IsTriangleValid(T))
 			{
-				Properties->InnerQuadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 				Properties->Areas[TriangleIndex] = GetTriangleArea(Mesh, T);
 				Properties->Normals[TriangleIndex] = GetTriangleNormal(Mesh, T);
 			}
@@ -351,7 +368,6 @@ void ContractEdge(
 				T->Vertex0Index = Mesh->VertexCount - 1;
 				if(IsTriangleValid(T))
 				{
-					Properties->InnerQuadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 					Properties->Areas[TriangleIndex] = GetTriangleArea(Mesh, T);
 					Properties->Normals[TriangleIndex] = GetTriangleNormal(Mesh, T);
 				}
@@ -367,7 +383,6 @@ void ContractEdge(
 				T->Vertex1Index = Mesh->VertexCount - 1;
 				if(IsTriangleValid(T))
 				{
-					Properties->InnerQuadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 					Properties->Areas[TriangleIndex] = GetTriangleArea(Mesh, T);
 					Properties->Normals[TriangleIndex] = GetTriangleNormal(Mesh, T);
 				}
@@ -383,7 +398,6 @@ void ContractEdge(
 				T->Vertex2Index = Mesh->VertexCount - 1;
 				if(IsTriangleValid(T))
 				{
-					Properties->InnerQuadrics[TriangleIndex] = GetQuadricOfTriangle(Mesh, T);
 					Properties->Areas[TriangleIndex] = GetTriangleArea(Mesh, T);
 					Properties->Normals[TriangleIndex] = GetTriangleNormal(Mesh, T);
 				}
@@ -447,6 +461,7 @@ bool IsZeroMatrix(mat4 M)
 	return(true);
 }
 
+#if 0
 void ComputeContractions(mesh* Mesh, contraction_queue* Queue, mat4* Quadrics)
 {
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
@@ -478,6 +493,7 @@ void ComputeContractions(mesh* Mesh, contraction_queue* Queue, mat4* Quadrics)
 		}
 	}
 }
+#endif
 
 contraction GetBestContraction(mesh* Mesh, 
 		mat4* Quadrics, 
@@ -497,8 +513,9 @@ contraction GetBestContraction(mesh* Mesh,
 				contraction C = {};
 				C.Edge = E;
 
-				//mat4 Quadric = ComputeQuadrics[E.Vertex0Index] + Quadrics[E.Vertex1Index];
-				mat4 Quadric = ComputeQuadric(E.Vertex0Index, Quadrics, ReverseTriangleIndices) + ComputeQuadric(E.Vertex1Index, Quadrics, ReverseTriangleIndices);
+				mat4 Quadric = ComputeQuadricFromEdge(Mesh, E, Quadrics, ReverseTriangleIndices);
+				//mat4 Quadric = ComputeQuadric(E.Vertex0Index, Quadrics, ReverseTriangleIndices) +
+					//ComputeQuadric(E.Vertex1Index, Quadrics, ReverseTriangleIndices);
 				ComputeCostAndVertexOfContraction(Mesh, &C, Quadric);
 
 				if(C.Cost < Result.Cost)
@@ -605,7 +622,7 @@ bool IsTriangleBoundaryOfProxy(mesh* Mesh, u32 TriangleIndex, proxy* Proxy, tria
 }
 
 s32 FindBestPlanarTriangleWithConstraints(mesh* Mesh, float* PlanarityScore, u32 Count, 
-		proxy* Proxies, u32 ProxyCount, triangle_index_list* ReverseTriangleIndices,
+		proxy* Proxy, triangle_index_list* ReverseTriangleIndices,
 		s32* TriangleProxyMap)
 {
 	float BestScoreFound = -1.0f;
@@ -615,7 +632,7 @@ s32 FindBestPlanarTriangleWithConstraints(mesh* Mesh, float* PlanarityScore, u32
 	{
 		if(!IsTriangleInProxies(TriangleIndex, TriangleProxyMap))
 		{
-			if(IsTriangleBoundaryOfProxy(Mesh, TriangleIndex, Proxies + (ProxyCount - 1), ReverseTriangleIndices))
+			if(IsTriangleBoundaryOfProxy(Mesh, TriangleIndex, Proxy, ReverseTriangleIndices))
 			{
 				FoundOneNotInProxies = true;
 				float TriangleScore = PlanarityScore[TriangleIndex];
@@ -711,7 +728,10 @@ void ComputeProperties(mesh* Mesh, triangles_properties* Properties,
 			Proxy.TriangleCount = 1;
 			Proxy.TriangleIndices[0] = BestPlanarTriangleIndex;
 			Proxy.N = Properties->Normals[BestPlanarTriangleIndex];
-			Proxy.D = - Dot(Proxy.N, Mesh->Vertices[Mesh->Triangles[BestPlanarTriangleIndex].Vertex0Index]);
+			vertex TriangleBarycenter = (1.0f / 3.0f) * (Mesh->Vertices[Mesh->Triangles[BestPlanarTriangleIndex].Vertex0Index] +
+					Mesh->Vertices[Mesh->Triangles[BestPlanarTriangleIndex].Vertex1Index] +
+					Mesh->Vertices[Mesh->Triangles[BestPlanarTriangleIndex].Vertex2Index]);
+			Proxy.D = - Dot(Proxy.N, TriangleBarycenter);
 			Properties->Proxies[Properties->ProxyCount] = Proxy;
 			++Properties->ProxyCount;
 			Properties->ProxyMap[BestPlanarTriangleIndex] = Properties->ProxyCount - 1;
@@ -719,8 +739,11 @@ void ComputeProperties(mesh* Mesh, triangles_properties* Properties,
 			bool KeepGrowing = true;
 			while(KeepGrowing)
 			{
-				s32 BestIndex = FindBestPlanarTriangleWithConstraints(Mesh, Properties->PlanarityScore, 
-						Mesh->TriangleCount, &Properties->Proxies[0], Properties->ProxyCount, ReverseTriangleIndices,
+				s32 BestIndex = FindBestPlanarTriangleWithConstraints(Mesh, 
+						Properties->PlanarityScore, 
+						Mesh->TriangleCount, 
+						Properties->Proxies + (Properties->ProxyCount - 1), 
+						ReverseTriangleIndices,
 						Properties->ProxyMap);
 				if(BestIndex == -1)
 				{
@@ -759,7 +782,7 @@ void ComputeProperties(mesh* Mesh, triangles_properties* Properties,
 	}
 	// }
 
-	Properties->Lambda = 0.3f;
+	Properties->Lambda = 0.5f;
 	//Properties->Lambda = 0.0f;
 	Properties->InnerQuadrics = AllocateArray(mat4, Mesh->TriangleCount);
 	memset(Properties->InnerQuadrics, 0, sizeof(mat4) * Mesh->TriangleCount);
