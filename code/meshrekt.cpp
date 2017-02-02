@@ -28,7 +28,6 @@ int main(int ArgumentCount, char** Arguments)
 		printf("You should give more arguments.\nTerminating.");
 		return(1);
 	}
-	srand(time(0));
 
 	mesh Mesh = ParseOFF(Arguments[1]);
 	PreProcessMesh(&Mesh);
@@ -44,8 +43,10 @@ int main(int ArgumentCount, char** Arguments)
 
 	triangles_properties Properties = {};
 	ComputeProperties(&Mesh, &Properties, ReverseTriangleIndices);
-	u32 ContractionGoal = 3000;
+	u32 ContractionGoal = 5000;
+	//contraction_queue Queue = CreateQueue();
 	contraction_queue Queue = {};
+	//InitQueue(&Mesh, &Queue, ReverseTriangleIndices, Properties.InnerQuadrics);
 
 	Assert(AreTrianglesValid(&Mesh));
 
@@ -53,7 +54,8 @@ int main(int ArgumentCount, char** Arguments)
 	{
 		printf("Computing contractions\n");
 
-		contraction C = GetBestContraction(&Mesh, Properties.InnerQuadrics, ReverseTriangleIndices);
+		contraction C = GetBestContraction(&Mesh, Properties.InnerQuadrics, 
+				ReverseTriangleIndices, &Queue);
 		ContractEdge(&Mesh, C.Edge, C.OptimalVertex, 
 				&Queue, 
 				&Properties, ReverseTriangleIndices,

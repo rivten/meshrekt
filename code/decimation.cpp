@@ -1,16 +1,29 @@
 
+// PARSING
+mesh ParseOFF(const char* Filename);
+void SaveOFF(mesh* Mesh, const char* Filename);
+
+// MESH OPERATIONS
+void DeleteTriangle(mesh* Mesh, u32 TriangleIndex)
+void DeleteVertex(mesh* Mesh, u32 VertexIndex)
+
+// DECIMATION
+mat4 QuadricFromPlane(v3 N, float d);
+void ComputeCostAndVertexOfContraction(mesh* Mesh, contraction* C, mat4 Quadric);
+contraction GetBestContraction(mesh* Mesh, mat4* Quadrics, triangle_index_list* ReverseTriangleIndices, contraction_queue* Queue);
+void ContractEdge(mesh* Mesh, edge E, vertex OptimalPos, contraction_queue* Queue, triangles_properties* Properties, triangle_index_list* ReverseTriangleIndices, proxy* Proxies, u32 ProxyCount, float Lambda);
+
+// PROXY DETECTION
+s32 FindBestPlanarTriangle(float* PlanarityScore, u32 Count, s32* TriangleProxyMap);
+
+// DISTANCE COMPUTATION
+float MeanDistance(mesh* A, mesh* B);
+
 struct contraction
 {
 	edge Edge;
 	float Cost;
 	vertex OptimalVertex;
-};
-
-struct contraction_queue
-{
-	contraction* Contractions;
-	u32 ContractionCount;
-	u32 ContractionPoolSize;
 };
 
 struct proxy
@@ -38,6 +51,7 @@ struct triangles_properties
 	float Lambda;
 };
 
+
 void SwitchProperties(triangles_properties* Properties, u32 AIndex, u32 BIndex)
 {
 	Properties->Areas[AIndex] = Properties->Areas[BIndex];
@@ -45,15 +59,6 @@ void SwitchProperties(triangles_properties* Properties, u32 AIndex, u32 BIndex)
 	Properties->PlanarityScore[AIndex] = Properties->PlanarityScore[BIndex];
 	Properties->ProxyMap[AIndex] = Properties->ProxyMap[BIndex];
 	Properties->InnerQuadrics[AIndex] = Properties->InnerQuadrics[BIndex];
-}
-
-void DeleteContraction(contraction_queue* Queue, u32 DeletedIndex)
-{
-	for(u32 ContractionIndex = DeletedIndex; ContractionIndex < Queue->ContractionCount - 1; ++ContractionIndex)
-	{
-		Queue->Contractions[ContractionIndex] = Queue->Contractions[ContractionIndex + 1];
-	}
-	Queue->ContractionCount--;
 }
 
 mat4 QuadricFromPlane(v3 N, float d)
@@ -119,45 +124,6 @@ void ComputeQuadrics(mesh* Mesh, mat4* TriangleQuadrics,
 		TriangleQuadrics[TriangleIndex] *= Area;
 	}
 }
-
-
-#if 0
-void PushContraction(contraction_queue* Queue, contraction C)
-{
-	if(Queue->ContractionCount == Queue->ContractionPoolSize)
-	{
-		Queue->Contractions = ReAllocateArray(Queue->Contractions, contraction, 2 * Queue->ContractionPoolSize);
-		Queue->ContractionPoolSize *= 2;
-	}
-
-	if(Queue->ContractionCount == 0)
-	{
-		Queue->Contractions[Queue->ContractionCount] = C;
-		Queue->ContractionCount++;
-	}
-	else if(C.Cost <= Queue->Contractions[Queue->ContractionCount - 1].Cost)
-	{
-		Queue->Contractions[Queue->ContractionCount] = C;
-		Queue->ContractionCount++;
-	}
-	else
-	{
-		for(u32 ContractionIndex = Queue->ContractionCount - 1; ContractionIndex >= 1; --ContractionIndex)
-		{
-			Queue->Contractions[ContractionIndex + 1] = Queue->Contractions[ContractionIndex];
-			if(C.Cost <= Queue->Contractions[ContractionIndex - 1].Cost)
-			{
-				Queue->Contractions[ContractionIndex] = C;
-				Queue->ContractionCount++;
-				return;
-			}
-		}
-		Queue->Contractions[1] = Queue->Contractions[0];
-		Queue->Contractions[0] = C;
-		Queue->ContractionCount++;
-	}
-}
-#endif
 
 mat4 ComputeQuadric(u32 VertexIndex, mat4* Quadrics, triangle_index_list* ReverseTriangleIndices)
 {
@@ -272,6 +238,8 @@ void UpdateReverseTriangleListAfterDeletion(
 }
 #endif
 
+#include "queue.h"
+
 void ContractEdge(
 		mesh* Mesh, 
 		edge E, 
@@ -311,10 +279,12 @@ void ContractEdge(
 	PushVertex(Mesh, OptimalPos);
 
 	// NOTE(hugo) : Remplacing all occurences of V0 and V1 in triangles by VF (the last point added to the mesh)
+	// TODO(hugo) : This loop could be smarter since I know which triangles are affected by the change
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
 	{
 		triangle* T = Mesh->Triangles + TriangleIndex;
 		bool DeletionHappened = false;
+		// TODO(hugo) : I think I should update the quadric or something
 		if(T->Vertex0Index == E.Vertex0Index)
 		{
 			T->Vertex0Index = Mesh->VertexCount - 1;
@@ -410,7 +380,7 @@ void ContractEdge(
 			}
 		}
 	}
-	PreProcessMesh(Mesh);
+	//PreProcessMesh(Mesh);
 
 	if(E.Vertex1Index == Mesh->VertexCount - 1)
 	{
@@ -421,31 +391,29 @@ void ContractEdge(
 	else
 	{
 		DeleteVertex(Mesh, E.Vertex0Index);
+		DeleteVertexFromQueue(Queue, E.Vertex0Index);
+		UpdateQueue(Queue, Mesh->VertexCount - 1, E.Vertex0Index);
+
 		DeleteVertex(Mesh, E.Vertex1Index);
+		DeleteVertexFromQueue(Queue, E.Vertex1Index);
+		UpdateQueue(Queue, Mesh->VertexCount - 1, E.Vertex1Index);
 
 		memset(ReverseTriangleIndices, 0, sizeof(triangle_index_list) * (Mesh->VertexCount + 1));
 		ComputeReverseTriangleIndices(Mesh, ReverseTriangleIndices);
+#if 1
 		ComputeQuadrics(Mesh, Properties->InnerQuadrics, Proxies, ProxyCount,
 				Properties->ProxyMap, Properties->Areas, Lambda);
+#else
+		// TODO(hugo) : optim for not computing _all_ quadrics
+		ComputeQuadrics(Mesh, Properties->InnerQuadrics, Proxies, ProxyCount,
+				Properties->ProxyMap, Properties->Areas, Lambda);
+
+		triangle_index_list* AffectedTriangles = ReverseTriangleIndices + E.Vertex0Index; // NOTE(hugo) : Now the new opt vertex is at the pos of Vertex0Index;
+		DeleteContractionsFromAffectedTriangles(Mesh, Queue, AffectedTriangles);
+		AddNewEdgesToQueue(Mesh, Queue, AffectedTriangles, 
+				ReverseTriangleIndices, Properties->InnerQuadrics);
+#endif
 	}
-}
-
-bool IsEdgeInQueue(edge E, contraction_queue* Queue)
-{
-	for(u32 ContractionIndex = 0; ContractionIndex < Queue->ContractionCount; ++ContractionIndex)
-	{
-		contraction* C = Queue->Contractions + ContractionIndex;
-		u32 ContVertex0Index = C->Edge.Vertex0Index;
-		u32 ContVertex1Index = C->Edge.Vertex1Index;
-
-		if((ContVertex0Index == E.Vertex0Index && ContVertex1Index == E.Vertex1Index)
-				|| (ContVertex0Index == E.Vertex1Index && ContVertex1Index == E.Vertex0Index))
-		{
-			return(true);
-		}
-	}
-
-	return(false);
 }
 
 
@@ -497,8 +465,10 @@ void ComputeContractions(mesh* Mesh, contraction_queue* Queue, mat4* Quadrics)
 
 contraction GetBestContraction(mesh* Mesh, 
 		mat4* Quadrics, 
-		triangle_index_list* ReverseTriangleIndices)
+		triangle_index_list* ReverseTriangleIndices,
+		contraction_queue* Queue)
 {
+#if 1
 	contraction Result = {};
 	Result.Cost = FLT_MAX;
 	for(u32 TriangleIndex = 0; TriangleIndex < Mesh->TriangleCount; ++TriangleIndex)
@@ -527,6 +497,13 @@ contraction GetBestContraction(mesh* Mesh,
 	}
 
 	return(Result);
+#else
+	Assert(Queue->Count > 0);
+	contraction Result = Queue->Contractions[Queue->Count - 1];
+	--Queue->Count;
+
+	return(Result);
+#endif
 }
 
 void PushTriangle(proxy* P, u32 TriangleIndex)
